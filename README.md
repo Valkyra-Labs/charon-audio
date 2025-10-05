@@ -8,7 +8,7 @@
 
 **Modern Rust music source separation library using state-of-the-art ML inference**
 
-Charon is a pure-Rust implementation for audio source separation, inspired by [Demucs](https://github.com/facebookresearch/demucs) but built entirely with modern Rust ML frameworks and performance optimizations from [rust-imbalanced-learn](https://github.com/timarocks/rust-imbalanced-learn).
+Charon is a pure-Rust implementation for audio source separation, inspired by [Demucs](https://github.com/facebookresearch/demucs) but built entirely with modern Rust ML frameworks and imbalanced learning performance optimizations.
 
 No Python dependencies!
 
