@@ -1,0 +1,33 @@
+# Rust / Cargo
+/target/
+**/*.rs.bk
+**/*.rs.orig
+Cargo.lock
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Bench/report artifacts
+criterion/
+profiling/
+
+# Build artifacts
+*.a
+*.o
+*.rlib
+*.dylib
+*.so
+*.dll
+
+# Logs
+*.log
+
+# Generated docs
+/target/doc/
+
+# Examples/bench data (if any)
+examples/data/
+benches/data/

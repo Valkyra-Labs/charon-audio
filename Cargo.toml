@@ -1,0 +1,89 @@
+[package]
+name = "charon-audio"
+version = "0.1.0"
+edition = "2021"
+authors = ["Valkyra Labs"]
+license = "MIT"
+description = "Modern Rust music source separation library using state-of-the-art ML inference"
+keywords = ["audio", "music", "separation", "ml", "demucs"]
+categories = ["multimedia::audio", "science"]
+readme = "README.md"
+repository = "https://github.com/Valkyra-Labs/charon-audio"
+homepage = "https://github.com/Valkyra-Labs/charon-audio"
+documentation = "https://docs.rs/charon-audio"
+
+[dependencies]
+# ML Inference - ONNX Runtime (fast, production-ready)
+ort = { version = "2.0.0-rc.9", features = ["download-binaries"], optional = true }
+candle-core = { version = "0.6", optional = true }
+candle-nn = { version = "0.6", optional = true }
+candle-transformers = { version = "0.6", optional = true }
+
+# Audio I/O and Processing
+symphonia = { version = "0.5", features = ["all"] }
+rubato = "0.15"
+hound = "3.5"
+cpal = "0.15"  # Real-time audio I/O
+
+# Numerical computing
+ndarray = { version = "0.15", features = ["rayon"] }
+num-traits = "0.2"
+
+# Parallel processing
+rayon = "1.10"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Utilities
+log = "0.4"
+env_logger = "0.11"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Progress bars
+indicatif = "0.17"
+
+# File system utilities
+walkdir = "2.5"
+
+# WebAssembly support
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+serde-wasm-bindgen = "0.6"
+console_error_panic_hook = "0.1"
+web-sys = { version = "0.3", features = ["AudioContext", "AudioBuffer"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+approx = "0.5"
+
+[features]
+default = ["ort-backend"]
+ort-backend = ["ort"]
+candle-backend = ["candle-core", "candle-nn", "candle-transformers"]
+cuda = ["candle-core?/cuda", "ort?/cuda"]
+tensorrt = ["ort?/tensorrt"]
+metal = ["candle-core?/metal"]
+accelerate = ["candle-core?/accelerate"]
+
+[package.metadata.docs.rs]
+features = ["ort-backend"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[[bench]]
+name = "audio_bench"
+harness = false
+
+[lib]
+name = "charon_audio"
+path = "src/lib.rs"
+
+[[example]]
+name = "separate"
+path = "examples/separate.rs"
+
+[[example]]
+name = "realtime"
+path = "examples/realtime.rs"
