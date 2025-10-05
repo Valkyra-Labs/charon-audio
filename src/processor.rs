@@ -53,13 +53,16 @@ impl Processor {
         if self.config.normalize {
             let mean = processed_audio.data.mean().unwrap_or(0.0);
             let std = processed_audio.data.std(0.0);
-            processed_audio.data.mapv_inplace(|x| (x - mean) / (std + 1e-8));
+            processed_audio
+                .data
+                .mapv_inplace(|x| (x - mean) / (std + 1e-8));
         }
 
         // Check if we need to segment
-        let segment_samples = self.config.segment_length.map(|len| {
-            (len * processed_audio.sample_rate as f64) as usize
-        });
+        let segment_samples = self
+            .config
+            .segment_length
+            .map(|len| (len * processed_audio.sample_rate as f64) as usize);
 
         let separated = if let Some(seg_len) = segment_samples {
             if processed_audio.samples() > seg_len {
@@ -75,14 +78,14 @@ impl Processor {
         let mut output_buffers = Vec::new();
         for separated_source in separated {
             let mut buffer = AudioBuffer::new(separated_source, audio.sample_rate);
-            
+
             // Apply inverse normalization if needed
             if self.config.normalize {
                 let mean = audio.data.mean().unwrap_or(0.0);
                 let std = audio.data.std(0.0);
                 buffer.data.mapv_inplace(|x| x * (std + 1e-8) + mean);
             }
-            
+
             output_buffers.push(buffer);
         }
 
@@ -102,15 +105,13 @@ impl Processor {
     fn process_with_shifts(&self, model: &Model, audio: &AudioBuffer) -> Result<Vec<Array2<f32>>> {
         let shift_amount = audio.sample_rate as usize / 2; // 0.5 second shift
         let num_sources = model.config().sources.len();
-        
-        let mut accumulated: Vec<Array2<f32>> = vec![
-            Array2::zeros((audio.channels(), audio.samples()));
-            num_sources
-        ];
+
+        let mut accumulated: Vec<Array2<f32>> =
+            vec![Array2::zeros((audio.channels(), audio.samples())); num_sources];
 
         for shift_idx in 0..self.config.shifts {
             let shift = (shift_idx * shift_amount) % audio.samples();
-            
+
             // Shift input
             let mut shifted_data = audio.data.clone();
             if shift > 0 {
@@ -187,10 +188,8 @@ impl Processor {
         };
 
         // Initialize output arrays
-        let mut outputs: Vec<Array2<f32>> = vec![
-            Array2::zeros((channels, total_samples));
-            num_sources
-        ];
+        let mut outputs: Vec<Array2<f32>> =
+            vec![Array2::zeros((channels, total_samples)); num_sources];
         let mut weight = Array2::zeros((1, total_samples));
 
         // Combine segments with overlap
@@ -227,14 +226,14 @@ impl Processor {
     /// Create fade window for overlap-add
     fn create_fade_window(&self, length: usize, overlap: usize) -> Vec<f32> {
         let mut window = vec![1.0; length];
-        
+
         if overlap > 0 {
             // Fade in
             for (i, win) in window.iter_mut().enumerate().take(overlap.min(length)) {
                 let t = i as f32 / overlap as f32;
                 *win = t;
             }
-            
+
             // Fade out
             for i in 0..overlap.min(length) {
                 let idx = length - overlap + i;
@@ -244,7 +243,7 @@ impl Processor {
                 }
             }
         }
-        
+
         window
     }
 }
@@ -264,10 +263,10 @@ mod tests {
     #[test]
     fn test_fade_window() {
         use approx::assert_abs_diff_eq;
-        
+
         let processor = Processor::new(ProcessConfig::default());
         let window = processor.create_fade_window(100, 20);
-        
+
         assert_eq!(window.len(), 100);
         // First sample starts fading in from 0
         assert_abs_diff_eq!(window[0], 0.0, epsilon = 0.01);

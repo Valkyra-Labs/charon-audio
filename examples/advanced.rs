@@ -1,8 +1,6 @@
 //! Example: Advanced audio processing with performance optimizations
 
-use charon_audio::{
-    AudioKNN, BatchProcessor, PerformanceHint, PerformanceHints, SimdOps,
-};
+use charon_audio::{AudioKNN, BatchProcessor, PerformanceHint, PerformanceHints, SimdOps};
 use ndarray::Array2;
 use std::time::Instant;
 
@@ -106,7 +104,11 @@ fn demo_audio_similarity() -> anyhow::Result<()> {
 
     let elapsed = start.elapsed();
 
-    println!("   Found {} similar segments in {:?}", similar.len(), elapsed);
+    println!(
+        "   Found {} similar segments in {:?}",
+        similar.len(),
+        elapsed
+    );
     for (i, (position, distance)) in similar.iter().take(3).enumerate() {
         println!(
             "     {}. Position: {} samples, Distance: {:.4}",
@@ -125,9 +127,7 @@ fn demo_batch_processing() -> anyhow::Result<()> {
     println!("   --------------------------");
 
     // Simulate multiple audio files
-    let files: Vec<String> = (0..20)
-        .map(|i| format!("audio_{i}.wav"))
-        .collect();
+    let files: Vec<String> = (0..20).map(|i| format!("audio_{i}.wav")).collect();
 
     let processor = BatchProcessor::new(5).with_threads(4);
 
@@ -143,10 +143,7 @@ fn demo_batch_processing() -> anyhow::Result<()> {
     let elapsed = start.elapsed();
 
     println!("   Processed {} files in {:?}", results.len(), elapsed);
-    println!(
-        "   Average: {:?} per file",
-        elapsed / results.len() as u32
-    );
+    println!("   Average: {:?} per file", elapsed / results.len() as u32);
     println!();
 
     Ok(())

@@ -18,7 +18,7 @@ fn main() -> anyhow::Result<()> {
 
     println!("Loading model...");
     let separator = Arc::new(Separator::new(config)?);
-    
+
     println!("Model loaded!");
     println!();
     println!("Note: This is a conceptual example.");

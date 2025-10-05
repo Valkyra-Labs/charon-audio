@@ -1,12 +1,13 @@
 //! ML model backends and configuration
 
 use crate::error::{CharonError, Result};
-use ndarray::Array2;
 #[cfg(feature = "candle-backend")]
 use candle_core::{Device, Tensor};
+use ndarray::Array2;
 #[cfg(feature = "ort-backend")]
-use ort::{
-    session::{builder::{GraphOptimizationLevel, SessionBuilder}, Session},
+use ort::session::{
+    builder::{GraphOptimizationLevel, SessionBuilder},
+    Session,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -46,7 +47,7 @@ impl Default for ModelConfig {
         Self {
             model_path: PathBuf::from("model.onnx"),
             #[cfg(any(feature = "ort-backend", feature = "candle-backend"))]
-            backend: None,  // Will be inferred from file extension
+            backend: None, // Will be inferred from file extension
             sample_rate: 44100,
             channels: 2,
             sources: vec![
@@ -87,11 +88,11 @@ impl OnnxModel {
         // 1. Converting input to proper ONNX tensor format
         // 2. Running session inference
         // 3. Parsing output tensors
-        
+
         // Placeholder: return copies of input as "separated" sources
         let num_sources = self.config.sources.len();
         let separated = vec![input.clone(); num_sources];
-        
+
         Ok(separated)
     }
 }
@@ -109,50 +110,58 @@ impl CandleModel {
     /// Create new Candle model
     pub fn new(config: ModelConfig) -> Result<Self> {
         use candle_core::safetensors;
-        
+
         let device = if cfg!(target_arch = "wasm32") {
             Device::Cpu
         } else {
             Device::cuda_if_available(0).unwrap_or(Device::Cpu)
         };
-        
+
         let model = if config.model_path.exists() {
             let tensors = safetensors::load(&config.model_path, &device)?;
             let mut varmap = candle_nn::VarMap::new();
             for (name, tensor) in tensors {
-                varmap.data().lock().unwrap().insert(name, candle_nn::Var::from_tensor(&tensor)?);
+                varmap
+                    .data()
+                    .lock()
+                    .unwrap()
+                    .insert(name, candle_nn::Var::from_tensor(&tensor)?);
             }
             Some(varmap)
         } else {
             None
         };
-        
-        Ok(Self { device, config, model })
+
+        Ok(Self {
+            device,
+            config,
+            model,
+        })
     }
 
     /// Run inference on audio data
     pub fn infer(&self, input: &Array2<f32>) -> Result<Vec<Array2<f32>>> {
         let (channels, samples) = (input.nrows(), input.ncols());
         let data: Vec<f32> = input.t().iter().copied().collect();
-        
+
         let tensor = Tensor::from_vec(data, (samples, channels), &self.device)?;
-        
+
         let output = if let Some(ref _model) = self.model {
             tensor.clone()
         } else {
             tensor.clone()
         };
-        
+
         let output_data: Vec<f32> = output.flatten_all()?.to_vec1()?;
         let num_sources = self.config.sources.len();
         let samples_per_source = output_data.len() / num_sources;
-        
+
         let mut separated = Vec::new();
         for i in 0..num_sources {
             let start = i * samples_per_source;
             let end = start + samples_per_source;
             let source_data = &output_data[start..end];
-            
+
             let mut source_array = Array2::zeros((channels, samples));
             for (idx, &val) in source_data.iter().enumerate() {
                 let ch = idx % channels;
@@ -191,7 +200,7 @@ impl Model {
             #[allow(unreachable_code)]
             None
         });
-        
+
         #[cfg(feature = "ort-backend")]
         if matches!(backend, Some(ModelBackend::OnnxRuntime)) {
             return Ok(Model::Onnx(OnnxModel::new(config)?));
@@ -200,7 +209,9 @@ impl Model {
         if matches!(backend, Some(ModelBackend::Candle)) {
             return Ok(Model::Candle(CandleModel::new(config)?));
         }
-        Err(CharonError::NotSupported("No ML backend enabled or auto-detected".to_string()))
+        Err(CharonError::NotSupported(
+            "No ML backend enabled or auto-detected".to_string(),
+        ))
     }
 
     /// Run inference
@@ -212,7 +223,9 @@ impl Model {
             #[cfg(feature = "candle-backend")]
             Model::Candle(model) => model.infer(input),
             #[allow(unreachable_patterns)]
-            _ => Err(CharonError::NotSupported("No model backend available".to_string())),
+            _ => Err(CharonError::NotSupported(
+                "No model backend available".to_string(),
+            )),
         }
     }
 
@@ -246,7 +259,7 @@ impl ModelRegistry {
     /// List available models
     pub fn list_models(&self) -> Result<Vec<String>> {
         let mut models = Vec::new();
-        
+
         if !self.models_dir.exists() {
             return Ok(models);
         }

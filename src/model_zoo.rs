@@ -30,12 +30,12 @@ impl ModelZoo {
     pub fn new<P: AsRef<Path>>(models_dir: P) -> Result<Self> {
         let models_dir = models_dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&models_dir)?;
-        
+
         let mut zoo = Self {
             models_dir,
             registry: HashMap::new(),
         };
-        
+
         zoo.register_builtin_models();
         Ok(zoo)
     }
@@ -48,7 +48,12 @@ impl ModelZoo {
                 name: "demucs-4stems".to_string(),
                 version: "1.0.0".to_string(),
                 description: "Demucs 4-stem separation (drums, bass, vocals, other)".to_string(),
-                sources: vec!["drums".to_string(), "bass".to_string(), "vocals".to_string(), "other".to_string()],
+                sources: vec![
+                    "drums".to_string(),
+                    "bass".to_string(),
+                    "vocals".to_string(),
+                    "other".to_string(),
+                ],
                 sample_rate: 44100,
                 channels: 2,
                 file_size_mb: 150.0,
@@ -61,8 +66,16 @@ impl ModelZoo {
             ModelMetadata {
                 name: "demucs-6stems".to_string(),
                 version: "1.0.0".to_string(),
-                description: "Demucs 6-stem separation (drums, bass, vocals, other, piano, guitar)".to_string(),
-                sources: vec!["drums".to_string(), "bass".to_string(), "vocals".to_string(), "other".to_string(), "piano".to_string(), "guitar".to_string()],
+                description: "Demucs 6-stem separation (drums, bass, vocals, other, piano, guitar)"
+                    .to_string(),
+                sources: vec![
+                    "drums".to_string(),
+                    "bass".to_string(),
+                    "vocals".to_string(),
+                    "other".to_string(),
+                    "piano".to_string(),
+                    "guitar".to_string(),
+                ],
                 sample_rate: 44100,
                 channels: 2,
                 file_size_mb: 200.0,
@@ -117,14 +130,17 @@ impl ModelZoo {
 
     /// Download model (placeholder - requires actual HTTP client)
     pub fn download_model(&self, name: &str) -> Result<PathBuf> {
-        let metadata = self.get_metadata(name)
+        let metadata = self
+            .get_metadata(name)
             .ok_or_else(|| CharonError::NotSupported(format!("Model {name} not found")))?;
 
-        let download_url = metadata.download_url.as_ref()
+        let download_url = metadata
+            .download_url
+            .as_ref()
             .ok_or_else(|| CharonError::NotSupported("No download URL available".to_string()))?;
 
         let target_path = self.models_dir.join(format!("{name}.onnx"));
-        
+
         if target_path.exists() {
             return Ok(target_path);
         }
@@ -136,10 +152,12 @@ impl ModelZoo {
 
     /// Load model configuration
     pub fn load_model(&self, name: &str) -> Result<ModelConfig> {
-        let metadata = self.get_metadata(name)
+        let metadata = self
+            .get_metadata(name)
             .ok_or_else(|| CharonError::NotSupported(format!("Model {name} not found")))?;
 
-        let model_path = self.get_model_path(name)
+        let model_path = self
+            .get_model_path(name)
             .ok_or_else(|| CharonError::NotSupported(format!("Model {name} not downloaded")))?;
 
         Ok(ModelConfig {

@@ -19,7 +19,7 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use charon::{Separator, SeparatorConfig};
+//! use charon_audio::{Separator, SeparatorConfig};
 //!
 //! # fn main() -> anyhow::Result<()> {
 //! // Create a separator with default settings
@@ -36,8 +36,8 @@
 
 pub mod audio;
 pub mod error;
-pub mod models;
 pub mod model_zoo;
+pub mod models;
 pub mod performance;
 pub mod processor;
 pub mod realtime;
@@ -50,8 +50,8 @@ pub mod wasm;
 // Re-export main types
 pub use audio::{AudioBuffer, AudioFile, AudioFormat};
 pub use error::{CharonError, Result};
-pub use models::{ModelBackend, ModelConfig};
 pub use model_zoo::{ModelMetadata, ModelZoo};
+pub use models::{ModelBackend, ModelConfig};
 pub use performance::{AudioKNN, BatchProcessor, PerformanceHint, PerformanceHints, SimdOps};
 pub use processor::{ProcessConfig, Processor};
 pub use realtime::RealtimeSeparator;

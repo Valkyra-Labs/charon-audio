@@ -125,7 +125,7 @@ impl AudioKNN {
                 let start = i * hop_size;
                 let end = start + segment_len;
                 let window = audio.slice(ndarray::s![.., start..end]);
-                
+
                 // Calculate similarity (negative distance)
                 let distance = Self::matrix_distance(&segment, &window);
                 (start, distance)
@@ -192,12 +192,7 @@ impl BatchProcessor {
     }
 
     /// Process audio buffers in chunks
-    pub fn process_chunks<F>(
-        &self,
-        data: &Array2<f32>,
-        chunk_size: usize,
-        f: F,
-    ) -> Vec<Array2<f32>>
+    pub fn process_chunks<F>(&self, data: &Array2<f32>, chunk_size: usize, f: F) -> Vec<Array2<f32>>
     where
         F: Fn(ArrayView2<f32>) -> Array2<f32> + Send + Sync,
     {
@@ -253,10 +248,7 @@ impl SimdOps {
         data.windows(3)
             .enumerate()
             .filter_map(|(i, window)| {
-                if window[1] > threshold
-                    && window[1] > window[0]
-                    && window[1] > window[2]
-                {
+                if window[1] > threshold && window[1] > window[0] && window[1] > window[2] {
                     Some(i + 1)
                 } else {
                     None
@@ -285,13 +277,13 @@ mod tests {
 
     #[test]
     fn test_audio_knn() {
-        let data = Array2::from_shape_vec((5, 3), vec![
-            1.0, 2.0, 3.0,
-            2.0, 3.0, 4.0,
-            3.0, 4.0, 5.0,
-            4.0, 5.0, 6.0,
-            5.0, 6.0, 7.0,
-        ]).unwrap();
+        let data = Array2::from_shape_vec(
+            (5, 3),
+            vec![
+                1.0, 2.0, 3.0, 2.0, 3.0, 4.0, 3.0, 4.0, 5.0, 4.0, 5.0, 6.0, 5.0, 6.0, 7.0,
+            ],
+        )
+        .unwrap();
 
         let query = Array2::from_shape_vec((1, 3), vec![2.5, 3.5, 4.5]).unwrap();
 
@@ -319,7 +311,7 @@ mod tests {
         let processor = BatchProcessor::new(10);
         let items: Vec<i32> = (0..100).collect();
         let results = processor.process(items, |x| x * 2);
-        
+
         assert_eq!(results.len(), 100);
         assert_eq!(results[0], 0);
         assert_eq!(results[99], 198);

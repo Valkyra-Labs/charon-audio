@@ -46,15 +46,11 @@ pub fn estimate_memory_mb(samples: usize, channels: usize, sources: usize) -> f6
 }
 
 /// Calculate optimal chunk size based on available memory
-pub fn calculate_chunk_size(
-    sample_rate: u32,
-    channels: usize,
-    target_memory_mb: f64,
-) -> usize {
+pub fn calculate_chunk_size(sample_rate: u32, channels: usize, target_memory_mb: f64) -> usize {
     let bytes_per_sample = channels * std::mem::size_of::<f32>();
     let target_bytes = target_memory_mb * 1024.0 * 1024.0;
     let samples = (target_bytes / bytes_per_sample as f64) as usize;
-    
+
     // Round to nearest second
     let samples_per_second = sample_rate as usize;
     (samples / samples_per_second) * samples_per_second

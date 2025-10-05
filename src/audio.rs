@@ -241,23 +241,51 @@ impl AudioFile {
     fn copy_samples(decoded: &AudioBufferRef, output: &mut [Vec<f32>]) {
         match decoded {
             AudioBufferRef::F32(buf) => {
-                for (ch, out_ch) in output.iter_mut().enumerate().take(buf.spec().channels.count()) {
+                for (ch, out_ch) in output
+                    .iter_mut()
+                    .enumerate()
+                    .take(buf.spec().channels.count())
+                {
                     out_ch.extend_from_slice(buf.chan(ch));
                 }
             }
             AudioBufferRef::S32(buf) => {
-                for (ch, out_ch) in output.iter_mut().enumerate().take(buf.spec().channels.count()) {
-                    out_ch.extend(buf.chan(ch).iter().map(|&s| IntoSample::<f32>::into_sample(s)));
+                for (ch, out_ch) in output
+                    .iter_mut()
+                    .enumerate()
+                    .take(buf.spec().channels.count())
+                {
+                    out_ch.extend(
+                        buf.chan(ch)
+                            .iter()
+                            .map(|&s| IntoSample::<f32>::into_sample(s)),
+                    );
                 }
             }
             AudioBufferRef::S16(buf) => {
-                for (ch, out_ch) in output.iter_mut().enumerate().take(buf.spec().channels.count()) {
-                    out_ch.extend(buf.chan(ch).iter().map(|&s| IntoSample::<f32>::into_sample(s)));
+                for (ch, out_ch) in output
+                    .iter_mut()
+                    .enumerate()
+                    .take(buf.spec().channels.count())
+                {
+                    out_ch.extend(
+                        buf.chan(ch)
+                            .iter()
+                            .map(|&s| IntoSample::<f32>::into_sample(s)),
+                    );
                 }
             }
             AudioBufferRef::U8(buf) => {
-                for (ch, out_ch) in output.iter_mut().enumerate().take(buf.spec().channels.count()) {
-                    out_ch.extend(buf.chan(ch).iter().map(|&s| IntoSample::<f32>::into_sample(s)));
+                for (ch, out_ch) in output
+                    .iter_mut()
+                    .enumerate()
+                    .take(buf.spec().channels.count())
+                {
+                    out_ch.extend(
+                        buf.chan(ch)
+                            .iter()
+                            .map(|&s| IntoSample::<f32>::into_sample(s)),
+                    );
                 }
             }
             _ => {}
@@ -273,18 +301,20 @@ impl AudioFile {
             sample_format: hound::SampleFormat::Float,
         };
 
-        let mut writer = WavWriter::create(path, spec)
-            .map_err(|e| CharonError::Audio(e.to_string()))?;
+        let mut writer =
+            WavWriter::create(path, spec).map_err(|e| CharonError::Audio(e.to_string()))?;
 
         // Interleave samples
         for i in 0..buffer.samples() {
             for ch in 0..buffer.channels() {
-                writer.write_sample(buffer.data[[ch, i]])
+                writer
+                    .write_sample(buffer.data[[ch, i]])
                     .map_err(|e| CharonError::Audio(e.to_string()))?;
             }
         }
 
-        writer.finalize()
+        writer
+            .finalize()
             .map_err(|e| CharonError::Audio(e.to_string()))?;
         Ok(())
     }
@@ -327,10 +357,10 @@ mod tests {
         let mut data = Array2::zeros((2, 100));
         data.row_mut(0).fill(1.0);
         data.row_mut(1).fill(3.0);
-        
+
         let buffer = AudioBuffer::new(data, 44100);
         let mono = buffer.to_mono();
-        
+
         assert_eq!(mono.nrows(), 1);
         assert_abs_diff_eq!(mono[[0, 0]], 2.0, epsilon = 0.001);
     }

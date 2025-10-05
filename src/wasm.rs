@@ -25,7 +25,12 @@ impl WasmSeparator {
                 backend: None,
                 sample_rate,
                 channels: 2,
-                sources: vec!["drums".to_string(), "bass".to_string(), "vocals".to_string(), "other".to_string()],
+                sources: vec![
+                    "drums".to_string(),
+                    "bass".to_string(),
+                    "vocals".to_string(),
+                    "other".to_string(),
+                ],
                 chunk_size: Some(441000),
             },
             process: Default::default(),
@@ -40,7 +45,7 @@ impl WasmSeparator {
     pub fn separate(&self, audio_data: Vec<f32>, channels: usize) -> Result<JsValue, JsValue> {
         let samples = audio_data.len() / channels;
         let mut array = Array2::zeros((channels, samples));
-        
+
         for (i, &sample) in audio_data.iter().enumerate() {
             let ch = i % channels;
             let samp = i / channels;
@@ -50,8 +55,10 @@ impl WasmSeparator {
         }
 
         let audio_buffer = AudioBuffer::new(array, self.separator.config.model.sample_rate);
-        
-        let stems = self.separator.separate(&audio_buffer)
+
+        let stems = self
+            .separator
+            .separate(&audio_buffer)
             .map_err(|e| JsValue::from_str(&format!("Separation failed: {}", e)))?;
 
         serde_wasm_bindgen::to_value(&stems.sources)

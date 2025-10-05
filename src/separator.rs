@@ -221,7 +221,7 @@ impl Separator {
                 .unwrap_or("output");
 
             let file_output = output_dir.join(file_stem);
-            
+
             if self.config.show_progress {
                 log::info!(
                     "Processing file {} of {}: {:?}",
