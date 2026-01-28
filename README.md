@@ -3,7 +3,6 @@
 [![Crates.io](https://img.shields.io/crates/v/charon-audio.svg)](https://crates.io/crates/charon-audio)
 [![Documentation](https://docs.rs/charon-audio/badge.svg)](https://docs.rs/charon-audio)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Build Status](https://github.com/Valkyra-Labs/charon-audio/workflows/CI/badge.svg)](https://github.com/Valkyra-Labs/charon-audio/actions)
 [![Downloads](https://img.shields.io/crates/d/charon-audio.svg)](https://crates.io/crates/charon-audio)
 
 **Modern Rust music source separation library using state-of-the-art ML inference**
