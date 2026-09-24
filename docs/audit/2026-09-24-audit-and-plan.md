@@ -406,6 +406,51 @@ Evaluation resources:
   score table is not a test-set benchmark: its ~40 tracks include MUSDB
   train/validation tracks.
 
+## 7a. How charon beats the alternatives (added 2026-09-24, after M5/M7)
+
+Separation quality is set by the model weights, not by Rust. With the
+same weights charon equals PyTorch Demucs (Q1, MUSDB7 records). So the
+product has to win elsewhere. Levers, in priority order, each with a
+measurable criterion. External numbers are hypotheses until replicated
+here.
+
+1. **Proven correctness as a product feature.** Parity against the
+   reference for every supported model, run in CI, published as a table.
+   None of the competitors found (demucs-rs, stem-splitter-core, UVR-rs,
+   python-audio-separator) publish reference parity. Cheap, and already
+   ours.
+2. **Memory.** 5.5 GB peak today for a 193 s track; the audio itself is
+   about 200 MB. The rest is ONNX Runtime. Levers, one at a time: memory
+   arena / memory pattern off, fp16-weights model, buffer reuse, thread
+   count. Model card claims ~1.1 GB (hypothesis). Memory sets the cloud
+   machine size and mobile feasibility, so it is the cost lever.
+3. **Speed on Apple Silicon and GPU.** ~8x real time on CPU today.
+   CoreML EP on macOS, CUDA on Linux, each measured. Then one
+   head-to-head table on one machine and one track set: PyTorch (CPU,
+   MPS), demucs-rs (wgpu/Metal), stem-splitter-core (ort + HTDemucs,
+   the direct analogue). No speed claim goes in the README unless the
+   table shows it.
+4. **Quality without training.** Several model families under one API
+   (htdemucs_ft bag, MDX-Net, RoFormer, Open-Unmix) and per-stem
+   ensembles. python-audio-separator has the breadth but needs Python;
+   each Rust crate covers one family. Shift gain (+0.2 dB, Demucs
+   authors' claim) to be measured on MUSDB.
+5. **Input and output fidelity.** Symphonia MP3 clamp (found), 24-bit
+   and FLAC output, headroom handling, delay-compensated resampling.
+6. **Distribution and licensing.** One binary, three OSes; model
+   manifests with SHA-256, license and source; a clean-license default
+   model (Open-Unmix umxhq, MIT).
+7. **Embedding.** C ABI and Python bindings. Not a plugin first:
+   demucs-rs already ships VST3/CLAP.
+
+Not competing on: training models; real-time HTDemucs.
+
+Order after v0.1.1: memory to <= 1.5 GB; CoreML plus the comparison
+table; MDX/RoFormer/ensembles with CI parity; CLI and model catalog.
+Stop condition: if after step 2 charon is not better than
+stem-splitter-core on memory and speed, and has no model-breadth lead,
+contribute the parity harness and museval port upstream instead.
+
 ## 8. CV guidance
 
 Until v0.1.1 is merged with a green CI badge and the end-to-end command
