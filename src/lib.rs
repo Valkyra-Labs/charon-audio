@@ -46,6 +46,7 @@ pub use audio::{AudioBuffer, AudioFile, AudioFormat, BitDepth};
 pub use error::{CharonError, Result};
 pub use model_zoo::{ModelMetadata, ModelZoo};
 pub use models::{ExecutionProvider, ModelBackend, ModelConfig, OnnxOptions, OptimizationLevel};
+#[allow(deprecated)]
 pub use performance::{AudioKNN, BatchProcessor, PerformanceHint, PerformanceHints, SimdOps};
 pub use processor::{ProcessConfig, Processor};
 #[cfg(feature = "realtime")]

@@ -1,10 +1,17 @@
-//! Performance optimization utilities inspired by rust-imbalanced-learn
+//! Deprecated utilities kept for API compatibility with 0.1.0.
+//!
+//! None of this is used by the separation pipeline. `SimdOps` are plain
+//! iterator loops (any vectorization is the compiler's), `AudioKNN` is a
+//! brute-force search unrelated to separation, and `PerformanceHints` is
+//! not consulted anywhere. They are deprecated and will be removed in 0.2.
+#![allow(deprecated)]
 
 use ndarray::{Array2, ArrayView2};
 use rayon::prelude::*;
 
 /// Performance hints for audio processing optimization
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[deprecated(since = "0.1.1", note = "unused by the pipeline; removed in 0.2")]
 pub enum PerformanceHint {
     /// Prefer cache-friendly access patterns
     CacheFriendly,
@@ -22,6 +29,7 @@ pub enum PerformanceHint {
 
 /// Collection of performance hints
 #[derive(Debug, Clone, Default)]
+#[deprecated(since = "0.1.1", note = "unused by the pipeline; removed in 0.2")]
 pub struct PerformanceHints {
     hints: Vec<PerformanceHint>,
 }
@@ -50,6 +58,7 @@ impl PerformanceHints {
 }
 
 /// KNN-based utilities for audio similarity and feature extraction
+#[deprecated(since = "0.1.1", note = "unused by the pipeline; removed in 0.2")]
 pub struct AudioKNN {
     k_neighbors: usize,
 }
@@ -152,6 +161,7 @@ impl AudioKNN {
 }
 
 /// Parallel batch processor for audio operations
+#[deprecated(since = "0.1.1", note = "unused by the pipeline; removed in 0.2")]
 pub struct BatchProcessor {
     #[allow(dead_code)]
     batch_size: usize,
@@ -212,6 +222,7 @@ impl BatchProcessor {
 }
 
 /// SIMD-optimized audio operations
+#[deprecated(since = "0.1.1", note = "unused by the pipeline; removed in 0.2")]
 pub struct SimdOps;
 
 impl SimdOps {
