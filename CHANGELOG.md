@@ -59,5 +59,9 @@
 
 ### Known limitations
 - Only HTDemucs is supported. Other ONNX models need their own contract.
-- Peak memory is 3.8-5.4 GB for 5-31 s inputs on the CPU execution
+- MP3 input is hard-clipped to [-1, 1] by the Symphonia 0.5.5 MP3
+  decoder (`symphonia-bundle-mp3` `synthesis.rs:329`). Masters that
+  decode above full scale lose those peaks before separation. See
+  `docs/parity/2026-09-24-htdemucs-real-tracks.md`.
+- Peak memory is 3.8-5.7 GB for 5-193 s inputs on the CPU execution
   provider, and has not yet been profiled.
