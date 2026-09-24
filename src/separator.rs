@@ -2,7 +2,9 @@
 
 use crate::audio::{AudioBuffer, AudioFile};
 use crate::error::{CharonError, Result};
-use crate::models::{Model, ModelBackend, ModelConfig};
+#[cfg(feature = "ort-backend")]
+use crate::models::ModelBackend;
+use crate::models::{Model, ModelConfig};
 use crate::processor::{ProcessConfig, Processor};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
@@ -37,15 +39,6 @@ impl SeparatorConfig {
         let mut config = Self::default();
         config.model.model_path = model_path.as_ref().to_path_buf();
         config.model.backend = Some(ModelBackend::OnnxRuntime);
-        config
-    }
-
-    /// Create configuration for Candle backend
-    #[cfg(feature = "candle-backend")]
-    pub fn candle<P: AsRef<Path>>(model_path: P) -> Self {
-        let mut config = Self::default();
-        config.model.model_path = model_path.as_ref().to_path_buf();
-        config.model.backend = Some(ModelBackend::Candle);
         config
     }
 
@@ -271,6 +264,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ort-backend")]
     fn test_config_builders() {
         let config = SeparatorConfig::onnx("model.onnx")
             .with_shifts(2)

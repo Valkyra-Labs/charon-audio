@@ -2,7 +2,6 @@
 /target/
 **/*.rs.bk
 **/*.rs.orig
-Cargo.lock
 
 # Editor / OS
 .DS_Store

@@ -21,10 +21,6 @@ pub enum CharonError {
     #[error("ONNX Runtime error: {0}")]
     Ort(#[from] ort::Error),
 
-    #[cfg(feature = "candle-backend")]
-    #[error("Candle error: {0}")]
-    Candle(#[from] candle_core::Error),
-
     #[error("Resampling error: {0}")]
     Resampling(String),
 
