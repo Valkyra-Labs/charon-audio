@@ -24,6 +24,19 @@
   fixture. Run it with `CHARON_HTDEMUCS_MODEL=... cargo test -- --ignored`.
 - `tools/parity/`: parity harness against PyTorch demucs and an
   onnxruntime port.
+- `OnnxOptions` on `ModelConfig`: intra-op threads, graph optimization
+  level, memory pattern, CPU arena, disabled graph transformers.
+  `OnnxOptions::low_memory()` (the HTDemucs preset default) and
+  `OnnxOptions::max_speed()` (ONNX Runtime defaults). Measured on a
+  193 s track: peak RSS 5.58 GB -> 2.12 GB for an 11% throughput cost
+  (`docs/parity/2026-09-24-memory.md`).
+- Output formats: `StemFormat` with WAV 16/24-bit int and 32-bit float,
+  and FLAC 16/24-bit (`flacenc`). `Stems::save_all_as`,
+  `AudioFile::write_wav_with_depth`, `AudioFile::write_flac`.
+- `examples/profile.rs`: stage timings and peak RSS. `separate` example
+  takes `--shifts`, `--format`, `--max-speed`.
+- CI workflow: fmt, clippy and tests over the feature matrix on Linux and
+  macOS, MSRV check, docs, and a weekly run of the real-model test.
 - `Stems::from_ordered`. `Stems::list` and `save_all` follow model
   output order.
 
@@ -43,6 +56,11 @@
   segment. `ProcessConfig::num_jobs` was removed.
 - `ort` is built without its `ndarray` and `tracing` features, which
   removes the second copy of ndarray from the build.
+- Symphonia 0.5 -> 0.6 with explicit codec/container features. Its MP3
+  decoder no longer hard-clips to [-1, 1]. Decoder errors are logged, not
+  silently skipped, and carry the failing stage.
+- Resampling processes in 4096-frame chunks with a flushed tail, and is
+  verified time-aligned with impulse tests at four rate pairs.
 - Declared `rust-version = "1.89"`, measured with the committed lockfile.
   Rust 1.86 fails. 1.87 and 1.88 were not tested.
 
@@ -59,9 +77,11 @@
 
 ### Known limitations
 - Only HTDemucs is supported. Other ONNX models need their own contract.
-- MP3 input is hard-clipped to [-1, 1] by the Symphonia 0.5.5 MP3
-  decoder (`symphonia-bundle-mp3` `synthesis.rs:329`). Masters that
-  decode above full scale lose those peaks before separation. See
-  `docs/parity/2026-09-24-htdemucs-real-tracks.md`.
-- Peak memory is 3.8-5.7 GB for 5-193 s inputs on the CPU execution
-  provider, and has not yet been profiled.
+- CPU execution provider only. The ONNX Runtime 1.28 CoreML provider
+  fails on the HTDemucs export in every configuration tried
+  (`docs/parity/2026-09-24-memory.md`); CUDA has not been measured
+  (no hardware).
+- Peak RSS with the default low-memory preset is about 2.1 GB for any
+  input length; about 0.7 GB of it is the loaded session.
+- Segments run one at a time; ONNX Runtime uses all cores within a
+  segment.
