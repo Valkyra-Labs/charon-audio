@@ -162,7 +162,6 @@ impl ModelZoo {
 
         Ok(ModelConfig {
             model_path,
-            #[cfg(any(feature = "ort-backend", feature = "candle-backend"))]
             backend: None,
             sample_rate: metadata.sample_rate,
             channels: metadata.channels,
