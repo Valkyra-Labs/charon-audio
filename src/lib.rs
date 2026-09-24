@@ -42,12 +42,12 @@ pub mod separator;
 pub mod utils;
 
 // Re-export main types
-pub use audio::{AudioBuffer, AudioFile, AudioFormat};
+pub use audio::{AudioBuffer, AudioFile, AudioFormat, BitDepth};
 pub use error::{CharonError, Result};
 pub use model_zoo::{ModelMetadata, ModelZoo};
-pub use models::{ModelBackend, ModelConfig};
+pub use models::{ExecutionProvider, ModelBackend, ModelConfig, OnnxOptions, OptimizationLevel};
 pub use performance::{AudioKNN, BatchProcessor, PerformanceHint, PerformanceHints, SimdOps};
 pub use processor::{ProcessConfig, Processor};
 #[cfg(feature = "realtime")]
 pub use realtime::RealtimeSeparator;
-pub use separator::{Separator, SeparatorConfig, Stems};
+pub use separator::{Separator, SeparatorConfig, StemFormat, Stems};
