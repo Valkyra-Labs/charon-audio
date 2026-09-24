@@ -167,6 +167,7 @@ impl ModelZoo {
             channels: metadata.channels,
             sources: metadata.sources.clone(),
             chunk_size: Some(441000),
+            ..ModelConfig::default()
         })
     }
 }

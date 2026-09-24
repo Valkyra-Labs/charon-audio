@@ -2,8 +2,9 @@
 //!
 //! Rust music source separation pipeline for ONNX models.
 //!
-//! Status: model inference is not implemented yet in this release; see the
-//! README status section.
+//! Supported model: the 4-stem HTDemucs ONNX export
+//! ([`SeparatorConfig::htdemucs`]). Segmentation, overlap-add and
+//! normalization follow Demucs 4.1.0.
 //!
 //! ## Features
 //!

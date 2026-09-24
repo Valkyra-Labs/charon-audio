@@ -16,7 +16,7 @@ fn main() -> anyhow::Result<()> {
 
     let input_path = &args[1];
     let output_dir = args.get(2).map(|s| s.as_str()).unwrap_or("separated");
-    let model_path = args.get(3).map(|s| s.as_str()).unwrap_or("model.onnx");
+    let model_path = args.get(3).map(|s| s.as_str()).unwrap_or("htdemucs.onnx");
 
     println!("Charon Audio Separator");
     println!("======================");
@@ -25,11 +25,8 @@ fn main() -> anyhow::Result<()> {
     println!("Model:  {model_path}");
     println!();
 
-    // Create configuration
-    let config = SeparatorConfig::onnx(model_path)
-        .with_shifts(1)
-        .with_segment_length(10.0)
-        .with_progress(true);
+    // HTDemucs ONNX export: 4 stems, fixed 7.8 s segments
+    let config = SeparatorConfig::htdemucs(model_path).with_progress(true);
 
     println!("Loading model...");
     let separator = Separator::new(config)?;
@@ -45,6 +42,6 @@ fn main() -> anyhow::Result<()> {
     println!("\nSaving stems to {output_dir}...");
     stems.save_all(output_dir)?;
 
-    println!("\n✓ Done!");
+    println!("\nDone.");
     Ok(())
 }
