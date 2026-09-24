@@ -3,11 +3,14 @@
 //! Usage: profile <input.wav> <model.onnx> [key=value ...]
 //! Keys: preset=default|lowmem|maxspeed (applied first), threads=N,
 //! opt=disable|basic|extended|all, mempattern=0|1, arena=0|1,
-//! nofold=0|1 (disable ConstantFolding), shifts=N,
+//! nofold=0|1 (disable ConstantFolding), split=1 (split-transform
+//! export), ep=cpu|coreml|auto, shifts=N,
 //! runs=N (repeat separation, default 1).
 //! Prints one JSON line per run so results can be tabulated.
 
-use charon_audio::{AudioFile, OnnxOptions, OptimizationLevel, Separator, SeparatorConfig};
+use charon_audio::{
+    AudioFile, ExecutionProvider, OnnxOptions, OptimizationLevel, Separator, SeparatorConfig,
+};
 use std::time::Instant;
 
 fn peak_rss_mb() -> f64 {
@@ -31,7 +34,13 @@ fn main() -> anyhow::Result<()> {
         );
         std::process::exit(1);
     }
-    let mut config = SeparatorConfig::htdemucs(&args[2]).with_progress(false);
+    let split = args[3..].iter().any(|a| a == "split=1");
+    let mut config = if split {
+        SeparatorConfig::htdemucs_split(&args[2])
+    } else {
+        SeparatorConfig::htdemucs(&args[2])
+    }
+    .with_progress(false);
     let mut runs = 1;
     let mut label = Vec::new();
     for kv in &args[3..] {
@@ -49,6 +58,14 @@ fn main() -> anyhow::Result<()> {
             }
             "mempattern" => config.model.onnx.memory_pattern = v == "1",
             "arena" => config.model.onnx.cpu_arena = v == "1",
+            "split" => {}
+            "ep" => {
+                config.model.onnx.execution_provider = match v {
+                    "cpu" => ExecutionProvider::Cpu,
+                    "coreml" => ExecutionProvider::CoreMl,
+                    _ => ExecutionProvider::Auto,
+                }
+            }
             "preset" => {
                 config.model.onnx = match v {
                     "lowmem" => OnnxOptions::low_memory(),

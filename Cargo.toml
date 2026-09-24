@@ -41,6 +41,7 @@ cpal = { version = "0.15", optional = true }
 
 # Numerical computing
 ndarray = { version = "0.15", features = ["rayon"] }
+realfft = "3.5"
 
 # Parallel processing
 rayon = "1.10"
@@ -66,9 +67,12 @@ serde_json = "1.0"
 default = ["ort-backend"]
 ort-backend = ["dep:ort"]
 realtime = ["dep:cpal"]
+# Apple CoreML execution provider (macOS). Used by the split-transform
+# HTDemucs export; measured in docs/parity/2026-09-25-gpu-and-speed.md.
+coreml = ["ort-backend", "ort/coreml"]
 # GPU execution providers for measurement only (examples/ep_probe). Not a
 # supported path: see docs/parity for what was measured.
-ep-experimental = ["ort-backend", "ort/coreml", "ort/webgpu"]
+ep-experimental = ["coreml", "ort/webgpu"]
 
 [package.metadata.docs.rs]
 features = ["ort-backend"]
