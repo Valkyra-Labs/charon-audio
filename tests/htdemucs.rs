@@ -39,6 +39,20 @@ fn fixture(name: &str) -> PathBuf {
 fn htdemucs_matches_pytorch_reference() {
     let model = std::env::var("CHARON_HTDEMUCS_MODEL")
         .expect("set CHARON_HTDEMUCS_MODEL to the path of htdemucs.onnx");
+    check_against_reference(SeparatorConfig::htdemucs(model));
+}
+
+/// Same check for the split-transform export (`tools/export/export_htdemucs.py`),
+/// on whichever execution provider `Auto` picks.
+#[test]
+#[ignore = "needs the split HTDemucs export; set CHARON_HTDEMUCS_SPLIT_MODEL"]
+fn htdemucs_split_matches_pytorch_reference() {
+    let model = std::env::var("CHARON_HTDEMUCS_SPLIT_MODEL")
+        .expect("set CHARON_HTDEMUCS_SPLIT_MODEL to the path of htdemucs_split.onnx");
+    check_against_reference(SeparatorConfig::htdemucs_split(model));
+}
+
+fn check_against_reference(config: SeparatorConfig) {
     let reference: Reference = serde_json::from_str(
         &std::fs::read_to_string(fixture("synth_9s_htdemucs_rms.json")).unwrap(),
     )
@@ -47,7 +61,7 @@ fn htdemucs_matches_pytorch_reference() {
     let audio = AudioFile::read(fixture("synth_9s.flac")).unwrap();
     assert_eq!((audio.channels(), audio.samples()), (2, 9 * 44100));
 
-    let separator = Separator::new(SeparatorConfig::htdemucs(model).with_progress(false)).unwrap();
+    let separator = Separator::new(config.with_progress(false)).unwrap();
     let stems = separator.separate(&audio).unwrap();
     assert_eq!(stems.list(), reference.sources);
 

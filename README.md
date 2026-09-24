@@ -4,23 +4,26 @@ Rust music source separation pipeline for ONNX models.
 
 charon runs the [HTDemucs](https://github.com/facebookresearch/demucs)
 4-stem model (drums, bass, other, vocals) through ONNX Runtime, with
-decoding, segmentation, overlap-add and output writing done in Rust.
-No Python at run time. The separation pipeline reproduces Demucs 4.1.0
-to float precision; every number in this file has a measurement record
-under [`docs/parity/`](docs/parity/).
+decoding, STFT/iSTFT, segmentation, overlap-add and output writing done
+in Rust. No Python at run time. On macOS the network runs on the GPU
+through CoreML. The pipeline reproduces Demucs 4.1.0 to float precision;
+every number in this file has a measurement record under
+[`docs/parity/`](docs/parity/).
 
 ## Status
 
 | Area | State |
 |---|---|
-| HTDemucs 4-stem separation (ONNX, CPU) | **Works.** Parity with PyTorch Demucs: max sample difference 1.2e-4 on synthetic input, equal median SDR on MUSDB18 test previews. See [Q1](docs/parity/2026-09-24-htdemucs-q1.md), [MUSDB7](docs/parity/2026-09-24-htdemucs-musdb7.md), [real tracks](docs/parity/2026-09-24-htdemucs-real-tracks.md). |
+| HTDemucs 4-stem separation, CPU | **Works.** Parity with PyTorch Demucs: max sample difference 1.2e-4 on synthetic input, equal median SDR on MUSDB18 test previews. See [Q1](docs/parity/2026-09-24-htdemucs-q1.md), [MUSDB7](docs/parity/2026-09-24-htdemucs-musdb7.md), [real tracks](docs/parity/2026-09-24-htdemucs-real-tracks.md). |
+| HTDemucs on the GPU (macOS, CoreML) | **Works** with the split-transform export (`coreml` feature). Output within 1.3e-5 of PyTorch on a full track. Separation 2.5x faster than the CPU path; loading the compiled model costs 7 s per process. [Record](docs/parity/2026-09-25-gpu-and-speed.md). |
 | Input: WAV, FLAC, MP3, OGG/Vorbis, AAC/M4A, ALAC, AIFF, CAF, MKV (Symphonia 0.6) | Works. Decoded samples are not clipped. Only WAV, FLAC and MP3 are exercised by tests or records. |
 | Output: WAV 16/24-bit int, 32-bit float; FLAC 16/24-bit | Works, round-trip tested. |
 | Resampling to the model rate (rubato) | Works, time-aligned (impulse tests). |
-| Memory | 2.1 GB peak with the default preset, 5.6 GB with `max_speed()`. [Record](docs/parity/2026-09-24-memory.md). |
-| Speed | About 7x real time on an Apple M4 Pro CPU (193 s track in 26.9 s including decode and write). [Record](docs/parity/2026-09-24-head-to-head.md). |
+| Memory | Split export: 3.4 GB peak on CPU, 3.8 GB on CoreML (ONNX Runtime activation memory). In-graph export: 2.1 GB with its low-memory preset. [Memory record](docs/parity/2026-09-24-memory.md), [GPU record](docs/parity/2026-09-25-gpu-and-speed.md). |
+| Speed, 193 s track on an Apple M4 Pro | Split export: 17.1 s CPU, 16.2 s CoreML end to end (8.2 s of it is separation on CoreML). In-graph export: 26.4 s. PyTorch: 35.5 s CPU, 9.0 s MPS. [Head-to-head](docs/parity/2026-09-24-head-to-head.md), [GPU record](docs/parity/2026-09-25-gpu-and-speed.md). |
 | Other models (MDX-Net, RoFormer, Open-Unmix, htdemucs_ft/6s) | **Not supported.** Each needs its own tensor contract and parity check. |
-| GPU / CoreML / CUDA | **Not supported.** The ORT 1.28 CoreML provider fails on this export in every configuration tried (record in the memory document). CUDA is unmeasured. |
+| CUDA, WebGPU | **Not supported.** CUDA is unmeasured (no hardware). WebGPU runs the in-graph export but slower than CPU. |
+| Split export hosting | The split model is not hosted yet. Produce it with `tools/export/export_htdemucs.py` (PyTorch + demucs 4.1.0; SHA-256 printed and recorded). |
 | Real-time (CPAL) | Experimental, behind the `realtime` feature, not real-time safe, no tests. |
 | Model download / zoo | Not implemented. `ModelZoo` holds metadata only; download the model yourself (below). |
 | CLI binary, C ABI, Python bindings | Not in this release. |
@@ -29,6 +32,13 @@ The published crate `charon-audio 0.1.0` on crates.io is an earlier
 version whose inference was a placeholder. Do not use it.
 
 ## Quick start
+
+Two model files exist. The in-graph export runs on the CPU only and can
+be downloaded. The split-transform export (STFT/iSTFT in charon) runs
+on CoreML and on the CPU, is faster on both, and currently has to be
+exported by you.
+
+### A. Download the in-graph export (CPU)
 
 1. Get the model (316 MB, fp32) and check its hash:
 
@@ -51,6 +61,31 @@ stereo). Options: `--format wav16|wav24|wav32|flac16|flac24`,
 `--shifts N` (time-shift ensemble), `--max-speed` (ONNX Runtime defaults:
 faster, 2.6x the memory).
 
+### B. Export the split model and run it on CoreML
+
+```bash
+python -m venv .venv && .venv/bin/pip install "demucs==4.1.0" torch onnx onnxruntime
+```
+
+```bash
+.venv/bin/python tools/export/export_htdemucs.py htdemucs_split.onnx
+```
+
+The script checks the export against PyTorch before writing and prints
+the SHA-256 (the recorded one is
+`6104c3de08607e0898f70835f1be1ff13a85bbea4826bdba80f9cb7b58fe088f` for
+demucs 4.1.0 + torch 2.14.0; other torch versions may differ in the
+last bits). Then:
+
+```bash
+cargo run --release --features coreml --example separate -- song.mp3 stems/ htdemucs_split.onnx --split
+```
+
+`--ep cpu|coreml|auto` picks the provider (default `auto`: CoreML if it
+builds, else CPU). The first CoreML run compiles the model (about 30 s)
+into `coreml-cache/` next to the model file; later runs load it in
+about 7 s.
+
 ### Library
 
 ```rust
@@ -64,12 +99,16 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-`SeparatorConfig::htdemucs` sets the model contract (input `mix`
-`[1, 2, 343980]`, output `stems` `[1, 4, 2, 343980]`, stem order drums,
-bass, other, vocals) and the low-memory ONNX Runtime preset. The
-processing settings follow Demucs: 7.8 s segments, 25% overlap,
-triangular overlap-add weights, normalization by the mono reference mean
-and standard deviation.
+`SeparatorConfig::htdemucs` sets the in-graph model contract (input
+`mix` `[1, 2, 343980]`, output `stems` `[1, 4, 2, 343980]`, stem order
+drums, bass, other, vocals) and the low-memory ONNX Runtime preset.
+`SeparatorConfig::htdemucs_split` sets the split contract (`mix` and a
+complex-as-channels spectrogram `spec` `[1, 4, 2048, 336]` in; `time`
+`[1, 4, 2, 343980]` and `spec_out` `[1, 4, 4, 2048, 336]` out; charon
+does `HTDemucs._spec`/`_ispec` and sums the branches). The processing
+settings follow Demucs: 7.8 s segments, 25% overlap, triangular
+overlap-add weights, normalization by the mono reference mean and
+standard deviation.
 
 ```rust
 use charon_audio::{OnnxOptions, SeparatorConfig};
@@ -97,8 +136,11 @@ model hash, versions, host and method. Summary, Apple M4 Pro, CPU:
 - MUSDB18 7-second test previews, whole-signal SDR (not museval; not
   comparable with published tables): drums 9.50, bass 9.04, other 5.19,
   vocals 8.88 dB. Mixture-as-estimate baseline: -4.1 to -6.9 dB.
-- Memory, 193 s track: 2.12 GB peak (default preset), 5.58 GB
-  (`max_speed`). Throughput cost of the default preset: 11%.
+- Split export, 193 s track: separation 16.6-17.7 s on CPU (memory
+  pattern on/off), 8.2 s on CoreML; end to end 17.1 s CPU, 16.2 s
+  CoreML; peak RSS 3.4 GB CPU, 3.8 GB CoreML.
+- In-graph export, 193 s track: 2.12 GB peak (low-memory preset),
+  5.58 GB (`max_speed`); 26.4 s end to end.
 - Head-to-head on the same track and machine, see the
   [head-to-head record](docs/parity/2026-09-24-head-to-head.md).
 
@@ -118,17 +160,22 @@ The real-model regression test needs the model:
 CHARON_HTDEMUCS_MODEL=/path/to/htdemucs.onnx cargo test --release -- --ignored
 ```
 
-Features: `ort-backend` (default), `realtime` (CPAL input, experimental).
+Features: `ort-backend` (default), `coreml` (CoreML execution provider,
+macOS), `realtime` (CPAL input, experimental), `ep-experimental`
+(CoreML + WebGPU for `examples/ep_probe`).
 
 ## Repository layout
 
 - `src/audio.rs`: decoding (Symphonia), resampling (rubato), WAV/FLAC
   writing.
-- `src/models.rs`: ONNX Runtime session, model contract, session options.
+- `src/models.rs`: ONNX Runtime session, model contracts, session
+  options, execution providers.
+- `src/stft.rs`: Demucs STFT/iSTFT (`_spec`/`_ispec`) with realfft.
 - `src/processor.rs`: segmentation, overlap-add, shifts, normalization.
 - `src/separator.rs`: `Separator`, `SeparatorConfig`, `Stems`.
 - `tests/`: identity-model pipeline tests, real-model regression test.
 - `tools/parity/`: scripts that produced the records in `docs/parity/`.
+- `tools/export/`: the split-transform ONNX export.
 - `docs/audit/`: the audit and plan this release was built against.
 
 ## Changelog
