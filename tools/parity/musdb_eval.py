@@ -1,6 +1,9 @@
 """Separation quality on the MUSDB18 7-second preview set.
 
-Usage: python musdb_eval.py <MUSDB18-7 dir> <charon separate binary> <htdemucs.onnx> <work dir>
+Usage: python musdb_eval.py <MUSDB18-7 dir> <charon separate binary> <htdemucs.onnx> <work dir> [charon extra args...]
+
+Extra arguments (for example `--shifts 2`) are passed to the charon binary.
+Set TORCH_SHIFTS to change the PyTorch reference's shifts (default 0).
 
 For every .stem.mp4 track: ffmpeg extracts mixture and ground-truth stems
 (stream order: mixture, drums, bass, other, vocals) to float WAV; charon
@@ -21,10 +24,13 @@ from pathlib import Path
 import numpy as np, soundfile as sf, torch, demucs.api
 
 SOURCES = ("drums", "bass", "other", "vocals")
+import os
 root, charon_bin, model, work = map(Path, sys.argv[1:5])
+extra = sys.argv[5:]
 work.mkdir(parents=True, exist_ok=True)
 torch.manual_seed(0)
-sep = demucs.api.Separator(model="htdemucs", shifts=0, overlap=0.25, split=True, device="cpu")
+torch_shifts = int(os.environ.get("TORCH_SHIFTS", "0"))
+sep = demucs.api.Separator(model="htdemucs", shifts=torch_shifts, overlap=0.25, split=True, device="cpu")
 
 def sdr(ref, est):
     return 10 * np.log10((ref ** 2).sum() / max(((ref - est) ** 2).sum(), 1e-20))
@@ -40,7 +46,7 @@ for track in sorted(root.rglob("*.stem.mp4")):
             subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(track), "-map", f"0:a:{idx}",
                             "-ar", "44100", "-c:a", "pcm_f32le", str(out)], check=True)
     mix, sr = sf.read(tdir / "mixture.wav", dtype="float32", always_2d=True)
-    subprocess.run([str(charon_bin), str(tdir / "mixture.wav"), str(tdir / "charon"), str(model)],
+    subprocess.run([str(charon_bin), str(tdir / "mixture.wav"), str(tdir / "charon"), str(model), *extra],
                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     _, torch_out = sep.separate_tensor(torch.from_numpy(np.ascontiguousarray(mix.T)), sr)
     for s in SOURCES:

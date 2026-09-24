@@ -66,8 +66,6 @@ serde_json = "1.0"
 default = ["ort-backend"]
 ort-backend = ["dep:ort"]
 realtime = ["dep:cpal"]
-# Apple CoreML execution provider (macOS/iOS only)
-coreml = ["ort-backend", "ort/coreml"]
 
 [package.metadata.docs.rs]
 features = ["ort-backend"]
