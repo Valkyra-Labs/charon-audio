@@ -4,7 +4,9 @@
 //! input unchanged.
 #![cfg(feature = "ort-backend")]
 
-use charon_audio::{AudioBuffer, AudioFile, ModelConfig, Separator, SeparatorConfig};
+use charon_audio::{
+    AudioBuffer, AudioFile, BitDepth, ModelConfig, Separator, SeparatorConfig, StemFormat,
+};
 use ndarray::Array2;
 use std::path::PathBuf;
 
@@ -132,4 +134,39 @@ fn wav_round_trip_is_exact() {
 
     assert_eq!(read.sample_rate, 48000);
     assert_eq!(read.data, input);
+}
+
+#[test]
+fn flac_and_int_wav_round_trip_through_symphonia() {
+    let separator = identity_separator(Some(SEGMENT), 1);
+    let input = signal(3000, 11);
+    let stems = separator
+        .separate(&AudioBuffer::new(input.clone(), 44100))
+        .unwrap();
+    let dir = std::env::temp_dir().join(format!("charon_formats_{}", std::process::id()));
+
+    for (format, ext, step) in [
+        (StemFormat::Flac(BitDepth::Int24), "flac", 1.0 / 8_388_608.0),
+        (StemFormat::Flac(BitDepth::Int16), "flac", 1.0 / 32_768.0),
+        (StemFormat::Wav(BitDepth::Int24), "wav", 1.0 / 8_388_608.0),
+    ] {
+        let out = dir.join(format!("{format:?}"));
+        stems.save_all_as(&out, format).unwrap();
+        let read = AudioFile::read(out.join(format!("vocals.{ext}"))).unwrap();
+        assert_eq!(read.sample_rate, 44100);
+        assert_eq!(read.data.dim(), input.dim(), "{format:?}");
+        let max_err = read
+            .data
+            .iter()
+            .zip(input.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        // Quantization error is at most half a step; the identity model
+        // and the pipeline add float rounding on top.
+        assert!(
+            max_err <= step,
+            "{format:?}: max error {max_err}, step {step}"
+        );
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
 }

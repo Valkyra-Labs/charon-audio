@@ -69,14 +69,15 @@ pub enum OptimizationLevel {
     All,
 }
 
-/// Execution provider for ONNX Runtime
+/// Execution provider for ONNX Runtime.
+///
+/// Only the CPU provider is offered. CoreML was tried on the HTDemucs
+/// export with ONNX Runtime 1.28 and failed in every configuration
+/// (docs/parity/2026-09-24-memory.md); it returns when a model runs on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ExecutionProvider {
     #[default]
     Cpu,
-    /// Apple CoreML (macOS/iOS), falls back to CPU for unsupported ops.
-    /// Needs the `coreml` feature.
-    CoreMl,
 }
 
 /// ONNX Runtime session options
@@ -220,35 +221,6 @@ impl OnnxModel {
             .build();
         builder = match opts.execution_provider {
             ExecutionProvider::Cpu => builder.with_execution_providers([cpu]).map_err(model_err)?,
-            #[cfg(feature = "coreml")]
-            ExecutionProvider::CoreMl => {
-                // MLProgram is the current CoreML format; the model's time axis
-                // is static, which lets CoreML compile fixed shapes. The
-                // compiled model is cached next to the ONNX file.
-                let cache_dir = config
-                    .model_path
-                    .parent()
-                    .map(|p| p.join("coreml-cache"))
-                    .unwrap_or_else(|| std::path::PathBuf::from("coreml-cache"));
-                std::fs::create_dir_all(&cache_dir)?;
-                builder
-                    .with_execution_providers([
-                        ort::ep::CoreML::default()
-                            .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
-                            .with_static_input_shapes(true)
-                            .with_compute_units(ort::ep::coreml::ComputeUnits::All)
-                            .with_model_cache_dir(cache_dir.display())
-                            .build(),
-                        cpu,
-                    ])
-                    .map_err(model_err)?
-            }
-            #[cfg(not(feature = "coreml"))]
-            ExecutionProvider::CoreMl => {
-                return Err(CharonError::NotSupported(
-                    "CoreML execution provider needs the `coreml` feature".to_string(),
-                ))
-            }
         };
         let session = builder.commit_from_file(&config.model_path)?;
 

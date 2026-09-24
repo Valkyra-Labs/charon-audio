@@ -247,6 +247,20 @@ impl BitDepth {
     }
 }
 
+/// flacenc 0.5 writes the size of the last, partial block as the
+/// STREAMINFO minimum block size. The FLAC format excludes the last block
+/// from that minimum, and readers such as Symphonia take `min != max` as a
+/// variable-block-size stream and fail. Set min = max, which is what the
+/// stream actually is (fixed block size).
+fn fix_streaminfo_min_blocksize(bytes: &mut [u8]) {
+    // "fLaC" marker (4) + metadata block header (4), then STREAMINFO:
+    // min block size u16, max block size u16.
+    if bytes.len() >= 12 && &bytes[..4] == b"fLaC" && bytes[4] & 0x7f == 0 {
+        bytes[8] = bytes[10];
+        bytes[9] = bytes[11];
+    }
+}
+
 /// Audio file reader/writer
 pub struct AudioFile;
 
@@ -272,7 +286,7 @@ impl AudioFile {
                 FormatOptions::default(),
                 MetadataOptions::default(),
             )
-            .map_err(|e| CharonError::Audio(e.to_string()))?;
+            .map_err(|e| CharonError::Audio(format!("probe: {e}")))?;
 
         let track = format
             .default_track(TrackType::Audio)
@@ -301,7 +315,7 @@ impl AudioFile {
                 {
                     break
                 }
-                Err(e) => return Err(CharonError::Audio(e.to_string())),
+                Err(e) => return Err(CharonError::Audio(format!("next_packet: {e}"))),
             };
             if packet.track_id != track_id {
                 continue;
@@ -312,7 +326,7 @@ impl AudioFile {
                     log::warn!("skipping undecodable packet: {msg}");
                     continue;
                 }
-                Err(e) => return Err(CharonError::Audio(e.to_string())),
+                Err(e) => return Err(CharonError::Audio(format!("decode: {e}"))),
             };
 
             let spec = decoded.spec();
@@ -428,7 +442,9 @@ impl AudioFile {
         stream
             .write(&mut sink)
             .map_err(|e| CharonError::Audio(format!("FLAC write: {e}")))?;
-        std::fs::write(path, sink.as_slice())?;
+        let mut bytes = sink.as_slice().to_vec();
+        fix_streaminfo_min_blocksize(&mut bytes);
+        std::fs::write(path, bytes)?;
         Ok(())
     }
 

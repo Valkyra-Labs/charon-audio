@@ -3,13 +3,11 @@
 //! Usage: profile <input.wav> <model.onnx> [key=value ...]
 //! Keys: preset=default|lowmem|maxspeed (applied first), threads=N,
 //! opt=disable|basic|extended|all, mempattern=0|1, arena=0|1,
-//! nofold=0|1 (disable ConstantFolding), ep=cpu|coreml, shifts=N,
+//! nofold=0|1 (disable ConstantFolding), shifts=N,
 //! runs=N (repeat separation, default 1).
 //! Prints one JSON line per run so results can be tabulated.
 
-use charon_audio::{
-    AudioFile, ExecutionProvider, OnnxOptions, OptimizationLevel, Separator, SeparatorConfig,
-};
+use charon_audio::{AudioFile, OnnxOptions, OptimizationLevel, Separator, SeparatorConfig};
 use std::time::Instant;
 
 fn peak_rss_mb() -> f64 {
@@ -63,12 +61,6 @@ fn main() -> anyhow::Result<()> {
                     vec!["ConstantFolding".to_string()]
                 } else {
                     Vec::new()
-                }
-            }
-            "ep" => {
-                config.model.onnx.execution_provider = match v {
-                    "coreml" => ExecutionProvider::CoreMl,
-                    _ => ExecutionProvider::Cpu,
                 }
             }
             "shifts" => config.process.shifts = v.parse()?,
