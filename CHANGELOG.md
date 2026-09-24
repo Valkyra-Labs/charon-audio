@@ -37,6 +37,10 @@
   takes `--shifts`, `--format`, `--max-speed`.
 - CI workflow: fmt, clippy and tests over the feature matrix on Linux and
   macOS, MSRV check, docs, and a weekly run of the real-model test.
+- Records under `docs/parity/`: memory/throughput cells, head-to-head
+  against PyTorch Demucs (CPU, MPS), stem-splitter-core and demucs-rs on
+  one machine, MUSDB18 preview quality for all of them, and shift
+  ensemble gain.
 - `Stems::from_ordered`. `Stems::list` and `save_all` follow model
   output order.
 
