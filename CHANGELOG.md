@@ -16,6 +16,14 @@
   `output_name`, `segment_samples`).
 - `ModelConfig::htdemucs` / `SeparatorConfig::htdemucs` for the 4-stem
   HTDemucs ONNX export (`StemSplitio/htdemucs-onnx`, `htdemucs.onnx`).
+- Tests (`tests/pipeline.rs`) that run the full pipeline through a
+  174-byte identity ONNX model. They cover segment boundaries, time
+  shifts, silence, empty input, stem order and WAV round-trip.
+- Ignored real-model test (`tests/htdemucs.rs`). It compares HTDemucs
+  output with PyTorch demucs 4.1.0 reference envelopes on a 9 s FLAC
+  fixture. Run it with `CHARON_HTDEMUCS_MODEL=... cargo test -- --ignored`.
+- `tools/parity/`: parity harness against PyTorch demucs and an
+  onnxruntime port.
 - `Stems::from_ordered`. `Stems::list` and `save_all` follow model
   output order.
 

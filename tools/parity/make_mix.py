@@ -17,6 +17,7 @@ def mix(seconds, seed):
     right = kick + 0.7 * hat + bass + 1.2 * voice + 0.8 * pad
     x = np.stack([left, right], axis=1)
     return (x / np.abs(x).max() * 0.8).astype(np.float32)
-for seconds in (5.0, 20.0, 31.3):
-    sf.write(f"mix_{seconds:g}s.wav", mix(seconds, int(seconds * 10)), SR, subtype="FLOAT")
-print("ok")
+if __name__ == "__main__":
+    for seconds in (5.0, 20.0, 31.3):
+        sf.write(f"mix_{seconds:g}s.wav", mix(seconds, int(seconds * 10)), SR, subtype="FLOAT")
+    print("ok")

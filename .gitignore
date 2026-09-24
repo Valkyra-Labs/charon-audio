@@ -30,3 +30,6 @@ profiling/
 # Examples/bench data (if any)
 examples/data/
 benches/data/
+
+# Python
+__pycache__/
