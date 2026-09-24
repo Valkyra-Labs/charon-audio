@@ -46,6 +46,9 @@ pub struct ModelConfig {
     /// Name of the model output tensor, shaped `[1, sources, channels, samples]`
     #[serde(default = "default_output_name")]
     pub output_name: String,
+    /// ONNX Runtime session options
+    #[serde(default)]
+    pub onnx: OnnxOptions,
 }
 
 fn default_input_name() -> String {
@@ -54,6 +57,74 @@ fn default_input_name() -> String {
 
 fn default_output_name() -> String {
     "stems".to_string()
+}
+
+/// Graph optimization level passed to ONNX Runtime
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum OptimizationLevel {
+    Disable,
+    Basic,
+    Extended,
+    #[default]
+    All,
+}
+
+/// Execution provider for ONNX Runtime
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ExecutionProvider {
+    #[default]
+    Cpu,
+    /// Apple CoreML (macOS/iOS), falls back to CPU for unsupported ops.
+    /// Needs the `coreml` feature.
+    CoreMl,
+}
+
+/// ONNX Runtime session options
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnnxOptions {
+    /// Intra-op threads; `None` uses all available cores
+    pub intra_threads: Option<usize>,
+    pub optimization_level: OptimizationLevel,
+    /// ORT memory-pattern optimization (pre-plans activation memory)
+    pub memory_pattern: bool,
+    /// ORT CPU memory arena
+    pub cpu_arena: bool,
+    /// Graph transformers to disable by name (for example `ConstantFolding`)
+    pub disabled_optimizers: Vec<String>,
+    pub execution_provider: ExecutionProvider,
+}
+
+impl Default for OnnxOptions {
+    /// ONNX Runtime's own defaults
+    fn default() -> Self {
+        Self {
+            intra_threads: None,
+            optimization_level: OptimizationLevel::All,
+            memory_pattern: true,
+            cpu_arena: true,
+            disabled_optimizers: Vec::new(),
+            execution_provider: ExecutionProvider::Cpu,
+        }
+    }
+}
+
+impl OnnxOptions {
+    /// Settings measured to cut peak memory on HTDemucs from 5.6 GB to
+    /// 2.1 GB at an 11% throughput cost (docs/parity/2026-09-24-memory.md):
+    /// constant folding off (it materializes about 3.8 GB of index tensors
+    /// at load) and no memory-pattern pre-planning.
+    pub fn low_memory() -> Self {
+        Self {
+            memory_pattern: false,
+            disabled_optimizers: vec!["ConstantFolding".to_string()],
+            ..Self::default()
+        }
+    }
+
+    /// ONNX Runtime defaults: fastest measured, highest memory
+    pub fn max_speed() -> Self {
+        Self::default()
+    }
 }
 
 /// Input length of the HTDemucs ONNX export: 7.8 s at 44.1 kHz.
@@ -77,6 +148,7 @@ impl ModelConfig {
             segment_samples: Some(HTDEMUCS_SEGMENT_SAMPLES),
             input_name: default_input_name(),
             output_name: default_output_name(),
+            onnx: OnnxOptions::low_memory(),
         }
     }
 }
@@ -98,6 +170,7 @@ impl Default for ModelConfig {
             segment_samples: None,
             input_name: default_input_name(),
             output_name: default_output_name(),
+            onnx: OnnxOptions::default(),
         }
     }
 }
@@ -116,16 +189,68 @@ impl OnnxModel {
     /// Create new ONNX model
     pub fn new(config: ModelConfig) -> Result<Self> {
         let model_err = |e: ort::Error<_>| CharonError::Model(e.to_string());
-        let session = Session::builder()?
-            .with_optimization_level(GraphOptimizationLevel::Level3)
+        let opts = &config.onnx;
+        let threads = opts.intra_threads.unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        });
+        let level = match opts.optimization_level {
+            OptimizationLevel::Disable => GraphOptimizationLevel::Disable,
+            OptimizationLevel::Basic => GraphOptimizationLevel::Level1,
+            OptimizationLevel::Extended => GraphOptimizationLevel::Level2,
+            OptimizationLevel::All => GraphOptimizationLevel::Level3,
+        };
+        let mut builder = Session::builder()?
+            .with_optimization_level(level)
             .map_err(model_err)?
-            .with_intra_threads(
-                std::thread::available_parallelism()
-                    .map(|n| n.get())
-                    .unwrap_or(4),
-            )
+            .with_intra_threads(threads)
             .map_err(model_err)?
-            .commit_from_file(&config.model_path)?;
+            .with_memory_pattern(opts.memory_pattern)
+            .map_err(model_err)?;
+        if !opts.disabled_optimizers.is_empty() {
+            builder = builder
+                .with_disabled_optimizers(opts.disabled_optimizers.join(";"))
+                .map_err(model_err)?;
+        }
+        // The CPU EP is always registered last as the fallback; its arena
+        // setting is what `cpu_arena` controls.
+        let cpu = ort::ep::CPU::default()
+            .with_arena_allocator(opts.cpu_arena)
+            .build();
+        builder = match opts.execution_provider {
+            ExecutionProvider::Cpu => builder.with_execution_providers([cpu]).map_err(model_err)?,
+            #[cfg(feature = "coreml")]
+            ExecutionProvider::CoreMl => {
+                // MLProgram is the current CoreML format; the model's time axis
+                // is static, which lets CoreML compile fixed shapes. The
+                // compiled model is cached next to the ONNX file.
+                let cache_dir = config
+                    .model_path
+                    .parent()
+                    .map(|p| p.join("coreml-cache"))
+                    .unwrap_or_else(|| std::path::PathBuf::from("coreml-cache"));
+                std::fs::create_dir_all(&cache_dir)?;
+                builder
+                    .with_execution_providers([
+                        ort::ep::CoreML::default()
+                            .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
+                            .with_static_input_shapes(true)
+                            .with_compute_units(ort::ep::coreml::ComputeUnits::All)
+                            .with_model_cache_dir(cache_dir.display())
+                            .build(),
+                        cpu,
+                    ])
+                    .map_err(model_err)?
+            }
+            #[cfg(not(feature = "coreml"))]
+            ExecutionProvider::CoreMl => {
+                return Err(CharonError::NotSupported(
+                    "CoreML execution provider needs the `coreml` feature".to_string(),
+                ))
+            }
+        };
+        let session = builder.commit_from_file(&config.model_path)?;
 
         Ok(Self {
             session: Mutex::new(session),

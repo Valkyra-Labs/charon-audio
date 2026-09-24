@@ -1,6 +1,6 @@
 //! Main separator API
 
-use crate::audio::{AudioBuffer, AudioFile};
+use crate::audio::{AudioBuffer, AudioFile, BitDepth};
 use crate::error::{CharonError, Result};
 #[cfg(feature = "ort-backend")]
 use crate::models::ModelBackend;
@@ -73,6 +73,36 @@ impl SeparatorConfig {
     }
 }
 
+/// Output encoding for saved stems
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StemFormat {
+    Wav(BitDepth),
+    /// FLAC, 16 or 24 bit
+    Flac(BitDepth),
+}
+
+impl Default for StemFormat {
+    fn default() -> Self {
+        StemFormat::Wav(BitDepth::Float32)
+    }
+}
+
+impl StemFormat {
+    fn extension(self) -> &'static str {
+        match self {
+            StemFormat::Wav(_) => "wav",
+            StemFormat::Flac(_) => "flac",
+        }
+    }
+
+    fn write(self, path: &Path, buffer: &AudioBuffer) -> Result<()> {
+        match self {
+            StemFormat::Wav(depth) => AudioFile::write_wav_with_depth(path, buffer, depth),
+            StemFormat::Flac(depth) => AudioFile::write_flac(path, buffer, depth),
+        }
+    }
+}
+
 /// Separated audio stems
 pub struct Stems {
     /// Map of source name to audio buffer
@@ -104,14 +134,19 @@ impl Stems {
         self.sources.get(name)
     }
 
-    /// Save all stems to directory
+    /// Save all stems to directory as 32-bit float WAV
     pub fn save_all<P: AsRef<Path>>(&self, output_dir: P) -> Result<()> {
+        self.save_all_as(output_dir, StemFormat::default())
+    }
+
+    /// Save all stems to directory in the given format
+    pub fn save_all_as<P: AsRef<Path>>(&self, output_dir: P, format: StemFormat) -> Result<()> {
         let output_dir = output_dir.as_ref();
         std::fs::create_dir_all(output_dir)?;
 
         for name in &self.order {
-            let output_path = output_dir.join(format!("{name}.wav"));
-            AudioFile::write_wav(&output_path, &self.sources[name])?;
+            let output_path = output_dir.join(format!("{name}.{}", format.extension()));
+            format.write(&output_path, &self.sources[name])?;
         }
 
         Ok(())
