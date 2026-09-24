@@ -3,9 +3,14 @@
 use crate::error::{CharonError, Result};
 use ndarray::Array2;
 #[cfg(feature = "ort-backend")]
-use ort::session::{builder::GraphOptimizationLevel, Session};
+use ort::{
+    session::{builder::GraphOptimizationLevel, Session},
+    value::Tensor,
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "ort-backend")]
+use std::sync::Mutex;
 
 /// Model backend types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +36,49 @@ pub struct ModelConfig {
     pub sources: Vec<String>,
     /// Chunk size for processing (in samples)
     pub chunk_size: Option<usize>,
+    /// Fixed model input length in samples, for models exported with a static
+    /// time axis. Overrides `ProcessConfig::segment_length` when set.
+    #[serde(default)]
+    pub segment_samples: Option<usize>,
+    /// Name of the model input tensor, shaped `[1, channels, samples]`
+    #[serde(default = "default_input_name")]
+    pub input_name: String,
+    /// Name of the model output tensor, shaped `[1, sources, channels, samples]`
+    #[serde(default = "default_output_name")]
+    pub output_name: String,
+}
+
+fn default_input_name() -> String {
+    "mix".to_string()
+}
+
+fn default_output_name() -> String {
+    "stems".to_string()
+}
+
+/// Input length of the HTDemucs ONNX export: 7.8 s at 44.1 kHz.
+pub const HTDEMUCS_SEGMENT_SAMPLES: usize = 343_980;
+
+impl ModelConfig {
+    /// Configuration for the 4-stem HTDemucs ONNX export
+    /// (`StemSplitio/htdemucs-onnx`, `htdemucs.onnx`): input `mix`
+    /// `[1, 2, 343980]`, output `stems` `[1, 4, 2, 343980]` in the order
+    /// drums, bass, other, vocals.
+    pub fn htdemucs<P: AsRef<Path>>(model_path: P) -> Self {
+        Self {
+            model_path: model_path.as_ref().to_path_buf(),
+            backend: None,
+            sample_rate: 44100,
+            channels: 2,
+            sources: ["drums", "bass", "other", "vocals"]
+                .map(String::from)
+                .to_vec(),
+            chunk_size: None,
+            segment_samples: Some(HTDEMUCS_SEGMENT_SAMPLES),
+            input_name: default_input_name(),
+            output_name: default_output_name(),
+        }
+    }
 }
 
 impl Default for ModelConfig {
@@ -47,6 +95,9 @@ impl Default for ModelConfig {
                 "other".to_string(),
             ],
             chunk_size: Some(441000), // 10 seconds at 44.1kHz
+            segment_samples: None,
+            input_name: default_input_name(),
+            output_name: default_output_name(),
         }
     }
 }
@@ -54,8 +105,9 @@ impl Default for ModelConfig {
 /// ONNX Runtime model wrapper
 #[cfg(feature = "ort-backend")]
 pub struct OnnxModel {
-    #[allow(dead_code)]
-    session: Session,
+    // `Session::run` needs `&mut self`; ONNX Runtime parallelizes inside a
+    // single run, so segments are processed one at a time.
+    session: Mutex<Session>,
     config: ModelConfig,
 }
 
@@ -67,21 +119,67 @@ impl OnnxModel {
         let session = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)
             .map_err(model_err)?
-            .with_intra_threads(4)
+            .with_intra_threads(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4),
+            )
             .map_err(model_err)?
             .commit_from_file(&config.model_path)?;
 
-        Ok(Self { session, config })
+        Ok(Self {
+            session: Mutex::new(session),
+            config,
+        })
     }
 
-    /// Run inference on audio data
+    /// Run inference on one segment of audio, shaped `[channels, samples]`.
+    ///
+    /// Returns one `[channels, samples]` array per source, in the order of
+    /// `ModelConfig::sources`.
     pub fn infer(&self, input: &Array2<f32>) -> Result<Vec<Array2<f32>>> {
-        // Placeholder: returns copies of the input as "separated" sources.
-        // Real inference lands with the HTDemucs model contract.
-        let num_sources = self.config.sources.len();
-        let separated = vec![input.clone(); num_sources];
+        let (channels, samples) = input.dim();
+        if let Some(fixed) = self.config.segment_samples {
+            if samples != fixed {
+                return Err(CharonError::Model(format!(
+                    "model expects {fixed} samples per segment, got {samples}"
+                )));
+            }
+        }
 
-        Ok(separated)
+        let data: Vec<f32> = input.iter().copied().collect();
+        let tensor = Tensor::from_array(([1, channels, samples], data))?;
+
+        let mut session = self
+            .session
+            .lock()
+            .map_err(|_| CharonError::Model("ONNX session lock poisoned".to_string()))?;
+        let outputs = session.run(ort::inputs![self.config.input_name.as_str() => tensor])?;
+        let output = outputs.get(&self.config.output_name).ok_or_else(|| {
+            CharonError::Model(format!(
+                "model has no output named '{}'",
+                self.config.output_name
+            ))
+        })?;
+        let (shape, values) = output.try_extract_tensor::<f32>()?;
+
+        let num_sources = self.config.sources.len();
+        let expected = [1, num_sources as i64, channels as i64, samples as i64];
+        if shape[..] != expected[..] {
+            return Err(CharonError::Model(format!(
+                "model output shape {:?}, expected {expected:?}",
+                &shape[..]
+            )));
+        }
+
+        let per_source = channels * samples;
+        values
+            .chunks_exact(per_source)
+            .map(|source| {
+                Array2::from_shape_vec((channels, samples), source.to_vec())
+                    .map_err(|e| CharonError::Model(e.to_string()))
+            })
+            .collect()
     }
 }
 

@@ -16,7 +16,15 @@ documentation = "https://docs.rs/charon-audio"
 [dependencies]
 # ML inference. ONNX Runtime release candidates break API between RCs, so the
 # version is pinned exactly; bump deliberately.
-ort = { version = "=2.0.0-rc.13", optional = true }
+# Default features minus `ndarray` (tensors are passed as flat buffers, which
+# avoids compiling a second ndarray version) and `tracing`.
+ort = { version = "=2.0.0-rc.13", optional = true, default-features = false, features = [
+    "std",
+    "download-binaries",
+    "tls-native",
+    "copy-dylibs",
+    "api-27",
+] }
 
 # Audio I/O and processing
 symphonia = { version = "0.5", features = ["all"] }
