@@ -10,6 +10,20 @@
   need `SeparatorConfig::onnx` now require the `ort-backend` feature.
 
 ### Added
+- Split-transform HTDemucs path: `tools/export/export_htdemucs.py`
+  exports the network with STFT/iSTFT outside the graph (185 MB,
+  parity-checked against PyTorch); `src/stft.rs` implements
+  `HTDemucs._spec` / `_ispec` with realfft, verified against `torch.stft`
+  fixtures; `ModelContract::DemucsSplit`,
+  `SeparatorConfig::htdemucs_split`.
+- `coreml` feature: Apple CoreML execution provider for the split export
+  (MLProgram, static shapes, compiled model cached next to the model
+  file). `ExecutionProvider::Auto` (default) uses CoreML when the
+  feature is on and the session builds, else CPU. Measured on a 193 s
+  track (M4 Pro): separation 8.4 s on CoreML vs 16.6 s on CPU with the
+  split export and 20.4 s with the in-graph export
+  (`docs/parity/2026-09-25-gpu-and-speed.md`). CoreML output agrees
+  with PyTorch to 1.3e-5.
 - Real ONNX inference. `OnnxModel::infer` runs the session and maps the
   `[1, sources, channels, samples]` output onto the stems. Tensor names
   and a fixed segment length are set per model (`ModelConfig::input_name`,
@@ -89,11 +103,15 @@
 
 ### Known limitations
 - Only HTDemucs is supported. Other ONNX models need their own contract.
-- CPU execution provider only. The ONNX Runtime 1.28 CoreML provider
-  fails on the HTDemucs export in every configuration tried
-  (`docs/parity/2026-09-24-memory.md`); CUDA has not been measured
-  (no hardware).
-- Peak RSS with the default low-memory preset is about 2.1 GB for any
-  input length; about 0.7 GB of it is the loaded session.
+- GPU: CoreML only (macOS, `coreml` feature, split export). The in-graph
+  STFT export fails on the ORT 1.28 CoreML provider in every
+  configuration tried (`docs/parity/2026-09-24-memory.md`). CUDA has not
+  been measured (no hardware). WebGPU runs but is slower than CPU.
+- The split export is not hosted yet; produce it with
+  `tools/export/export_htdemucs.py` (needs PyTorch and demucs 4.1.0).
+- Peak RSS: in-graph export with the low-memory preset about 2.1 GB;
+  split export on CPU about 3.3 GB, on CoreML about 3.7 GB (ONNX
+  Runtime activation memory; see the GPU record). Loading a cached
+  CoreML model takes about 7 s.
 - Segments run one at a time; ONNX Runtime uses all cores within a
   segment.

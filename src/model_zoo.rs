@@ -44,6 +44,7 @@ impl ModelZoo {
         };
 
         zoo.register_builtin_models();
+        zoo.register_split_model();
         Ok(zoo)
     }
 
@@ -69,6 +70,29 @@ impl ModelZoo {
                 ),
                 sha256: Some(
                     "68d0bf16428ef66e692cdff8a9ccf28f1ef3f69440d57e58605a4cc55fcc5e74".to_string(),
+                ),
+            },
+        );
+    }
+
+    fn register_split_model(&mut self) {
+        self.registry.insert(
+            "htdemucs-split".to_string(),
+            ModelMetadata {
+                name: "htdemucs-split".to_string(),
+                version: "tools/export/export_htdemucs.py, demucs 4.1.0".to_string(),
+                description: "HTDemucs 4-stem export with STFT/iSTFT outside the graph \
+                              (runs on CoreML). Not hosted: produce it with the export script."
+                    .to_string(),
+                sources: ["drums", "bass", "other", "vocals"]
+                    .map(String::from)
+                    .to_vec(),
+                sample_rate: 44100,
+                channels: 2,
+                file_size_mb: 176.6,
+                download_url: None,
+                sha256: Some(
+                    "6104c3de08607e0898f70835f1be1ff13a85bbea4826bdba80f9cb7b58fe088f".to_string(),
                 ),
             },
         );
@@ -137,9 +161,11 @@ impl ModelZoo {
             .get_model_path(name)
             .ok_or_else(|| CharonError::NotSupported(format!("Model {name} not downloaded")))?;
 
-        // The only registered contract is HTDemucs; other entries would
-        // need their own tensor names and segment length.
-        let mut config = ModelConfig::htdemucs(&model_path);
+        let mut config = if name == "htdemucs-split" {
+            ModelConfig::htdemucs_split(&model_path)
+        } else {
+            ModelConfig::htdemucs(&model_path)
+        };
         config.sample_rate = metadata.sample_rate;
         config.channels = metadata.channels;
         config.sources = metadata.sources.clone();

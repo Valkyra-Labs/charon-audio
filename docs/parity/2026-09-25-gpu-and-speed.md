@@ -123,3 +123,102 @@ transform exactly is the whole point.
 1 GB (from 2.1 GB), CPU-only path 17-18 s (from 20.4-22 s) because the
 STFT overhead and the low-memory penalty go away. Effort: 2-3 days
 including parity tests.
+
+## 4. Results after implementation (same day)
+
+Stamp: charon commit after `e97ccdb` (the split path), `cargo build
+--release --features coreml --example separate --example profile`.
+Export: `tools/export/export_htdemucs.py` with demucs 4.1.0, torch
+2.14.0, onnx 1.23.0; `htdemucs_split.onnx`, 185,200,998 bytes, SHA-256
+`6104c3de08607e0898f70835f1be1ff13a85bbea4826bdba80f9cb7b58fe088f`.
+Export-time parity: patched split model vs PyTorch 2.7e-7; ONNX on
+onnxruntime 1.30 CPU plus host iSTFT vs PyTorch 6.5e-5.
+
+### STFT/iSTFT in Rust
+
+`src/stft.rs` against `torch.stft`/`torch.istft` fixtures
+(`tests/fixtures/make_stft_fixture.py`, 20000 samples): forward and
+inverse both within 1e-5 relative to the largest value. Identity-model
+pipeline test through the split contract passes at 8192- and
+12000-sample segments (`tests/pipeline.rs`).
+
+### Parity against PyTorch demucs 4.1.0 (`shifts=0`)
+
+| input | provider | max \|diff\| (worst stem) | agreement SDR range |
+|---|---|---|---|
+| 3 synthetic clips (5, 20, 31.3 s) | CPU | 1.2e-4 | 66.8-90.0 dB |
+| 3 synthetic clips | CoreML | 1.7e-6 | 81.7-129.2 dB |
+| 193 s real track | CPU | 9.2e-4 | 66.5-80.5 dB |
+| 193 s real track | CoreML | 1.3e-5 | 114.3-121.3 dB |
+
+The CPU path reproduces the in-graph export's numbers exactly (the same
+ORT kernels). The CoreML path is 40 dB closer to PyTorch than ORT's CPU
+path; ORT's CPU fused kernels, not charon, account for the CPU gap.
+Outputs are finite everywhere.
+
+### Time and memory, 193 s track, M4 Pro
+
+Per-run (`examples/profile`, separation only, run 1 of 2):
+
+| path | load | separate | RTF | RSS after load | peak RSS |
+|---|---|---|---|---|---|
+| in-graph export, low-memory preset (0.1.1 default before this work) | 2.9 s | 22.8 s | 8.5 | 0.7 GB | 2.1 GB |
+| in-graph export, ORT defaults | 1.1 s | 20.4 s | 9.4 | 4.6 GB | 5.6 GB |
+| split export, CPU, memory pattern on | 0.2 s | 16.6 s | 11.6 | 0.65 GB | 5.3 GB |
+| **split export, CPU, memory pattern off (new CPU default)** | 0.2 s | 17.7 s | 10.9 | 0.65 GB | 3.3 GB |
+| **split export, CoreML (GPU)** | 27 s first / 7.4 s cached | **8.2 s** | **23.6** | 2.4 GB | 3.7 GB |
+
+Whole CLI (`separate`, decode + separate + write, `/usr/bin/time -l`,
+two passes): split CPU 17.07 / 17.07 s, 3.39 / 3.40 GB; split CoreML
+16.17 / 16.20 s, 3.79 / 3.79 GB. For comparison from the head-to-head
+record: charon in-graph 26.4 s, PyTorch CPU 35.5 s, PyTorch MPS 9.0 s,
+stem-splitter-core 27.7 s, demucs-rs (Metal, NaN output) 15.1 s.
+
+Reading:
+- CPU: 20.4 s -> 16.6/17.7 s (the STFT overhead is gone) and the
+  low-memory penalty no longer exists; load memory 4.6 GB -> 0.65 GB.
+- GPU: separation 8.2 s, 2.5x the CPU path and on par with PyTorch MPS's
+  model time. End to end the CoreML CLI is 16.2 s, not 9 s, because
+  loading the compiled CoreML model from cache takes 7.4 s of the 16 s.
+  That load is one-off per process: a long-running server or a batch of
+  tracks pays it once. The remaining lever for a single-track CLI is
+  keeping the CoreML session warm (a daemon or a persistent process).
+- Peak RSS is now ONNX Runtime's activation memory: with the split graph
+  ORT allocates 2.1-3.3 GB during a run (measured with `ep_probe`, no
+  charon code: 4.0 GB with memory pattern, 2.7 GB without). The folded
+  index constants of the in-graph export are gone, but the planner
+  over-allocates for this graph. Next lever: ORT arena configuration
+  (`OrtArenaCfg` extend strategy) or running the two branches as
+  separate sessions. Not done in this release.
+
+### Quality, MUSDB18 test previews
+
+50 tracks, median whole-signal SDR (dB), `tools/parity/musdb_eval.py`,
+PyTorch demucs 4.1.0 `shifts=0` recomputed in the same run.
+
+| path | drums | bass | other | vocals | max \|charon - torch\| |
+|---|---|---|---|---|---|
+| split export, CoreML | 9.50 | 9.04 | 5.19 | 8.88 | 2.5e-6 |
+| split export, CPU | 9.50 | 9.04 | 5.19 | 8.88 | 3.7e-4 |
+| in-graph export, CPU (MUSDB7 record) | 9.50 | 9.04 | 5.19 | 8.88 | 3.7e-4 |
+| PyTorch demucs 4.1.0 | 9.50 | 9.04 | 5.19 | 8.88 | |
+
+All three charon paths equal the PyTorch reference to two decimals on
+every stem; the CoreML path is within 2.5e-6 of it on every track. All
+outputs finite.
+
+### What this closes and what remains
+
+Closed: a GPU path on macOS with parity, and a CPU path with the STFT
+overhead and the memory/speed trade-off removed.
+
+Open, with numbers to beat:
+- End-to-end CoreML CLI is 16.2 s against PyTorch MPS 9.0 s because of
+  the 7.4 s compiled-model load; separation itself (8.2 s) is on par.
+  A resident process pays the load once.
+- Peak RSS 3.3-3.8 GB is ONNX Runtime activation memory on this graph
+  (2.7-4.0 GB with no charon code at all). Arena configuration or
+  splitting the branches into two sessions are the next experiments.
+- The split model is not hosted; the export is reproducible from the
+  script and its hash is recorded.
+

@@ -11,23 +11,95 @@ Graph contract (batch 1, segment 343980 samples = 7.8 s at 44.1 kHz):
                                       denormalized, same layout as input spec
   stems = time + _ispec(spec)   (done by the host)
 
-The network body is demucs 4.1.0 HTDemucs.forward unchanged; the export
-patches from demucs-onnx (segment Fraction, pos-embedding randrange,
-MultiheadAttention primitives) are reused. A parity check against the
+The network body is demucs 4.1.0 HTDemucs.forward unchanged; three tracer
+patches (segment Fraction, pos-embedding randrange, MultiheadAttention
+primitives) follow demucs-onnx 0.3.4 (MIT). A parity check against the
 unpatched PyTorch model runs before writing.
 
+Environment: demucs==4.1.0, torch (version printed), onnx, onnxruntime.
 Usage: python export_htdemucs.py out/htdemucs_split.onnx [--no-check]
 """
 import math, sys, types, hashlib
 from pathlib import Path
 import numpy as np, torch, torch.nn as nn, torch.nn.functional as F
+from fractions import Fraction
 from demucs.pretrained import get_model
-from demucs.spec import spectro, ispectro
-from demucs_onnx.export.segment import coerce_segment_to_float
-from demucs_onnx.export.pos_embed import disable_random_pos_shift
-from demucs_onnx.export.mha import onnx_friendly_mha_forward
+import demucs.transformer as tr
 
 N_SAMPLES, N_FFT, HOP = 343980, 4096, 1024
+
+
+# The three tracer patches below follow demucs-onnx 0.3.4 (MIT, StemSplit):
+# demucs_onnx/export/{segment,pos_embed,mha}.py. They change nothing
+# numerically at inference; they remove Python that torch.onnx.export
+# cannot trace.
+
+def coerce_segment_to_float(model):
+    """model.segment is a Fraction(39, 5); the exporter needs a float."""
+    if isinstance(getattr(model, "segment", None), Fraction):
+        model.segment = float(model.segment)
+
+
+def disable_random_pos_shift(model):
+    """CrossTransformerEncoder._get_pos_embedding calls random.randrange
+    (a no-op at eval since sin_random_shift == 0); hardcode shift = 0."""
+    for m in model.modules():
+        if hasattr(m, "sin_random_shift"):
+            m.sin_random_shift = 0
+
+    def _get_pos_embedding(self_, T, B, C, device):
+        if self_.emb == "sin":
+            return tr.create_sin_embedding(T, C, shift=0, device=device, max_period=self_.max_period)
+        if self_.emb == "cape":
+            return tr.create_sin_embedding_cape(
+                T, C, B, device=device, max_period=self_.max_period,
+                mean_normalize=self_.cape_mean_normalize, augment=False,
+                max_global_shift=0.0, max_local_shift=0.0, max_scale=1.0)
+        if self_.emb == "scaled":
+            return self_.position_embeddings(torch.arange(T, device=device))[:, None]
+        raise RuntimeError(f"unknown emb {self_.emb!r}")
+
+    for m in model.modules():
+        if isinstance(m, tr.CrossTransformerEncoder):
+            m._get_pos_embedding = types.MethodType(_get_pos_embedding, m)
+
+
+def onnx_friendly_mha_forward(self_, query, key, value, key_padding_mask=None,
+                              need_weights=True, attn_mask=None,
+                              average_attn_weights=True, is_causal=False):
+    """nn.MultiheadAttention.forward from Linear/bmm/softmax only; the fused
+    aten::_native_multi_head_attention kernel has no ONNX symbolic."""
+    if self_.batch_first:
+        query, key, value = (t.transpose(0, 1) for t in (query, key, value))
+    tgt_len, bsz, embed_dim = query.shape
+    src_len = key.shape[0]
+    num_heads = self_.num_heads
+    head_dim = embed_dim // num_heads
+    if self_._qkv_same_embed_dim:
+        w, b = self_.in_proj_weight, self_.in_proj_bias
+        w_q, w_k, w_v = w.chunk(3, dim=0)
+        b_q, b_k, b_v = b.chunk(3, dim=0) if b is not None else (None, None, None)
+        q, k, v = F.linear(query, w_q, b_q), F.linear(key, w_k, b_k), F.linear(value, w_v, b_v)
+    else:
+        bias = self_.in_proj_bias
+        q = F.linear(query, self_.q_proj_weight, bias[:embed_dim] if bias is not None else None)
+        k = F.linear(key, self_.k_proj_weight, bias[embed_dim:2 * embed_dim] if bias is not None else None)
+        v = F.linear(value, self_.v_proj_weight, bias[2 * embed_dim:] if bias is not None else None)
+    q = q.contiguous().view(tgt_len, bsz * num_heads, head_dim).transpose(0, 1) * head_dim ** -0.5
+    k = k.contiguous().view(src_len, bsz * num_heads, head_dim).transpose(0, 1)
+    v = v.contiguous().view(src_len, bsz * num_heads, head_dim).transpose(0, 1)
+    attn = torch.bmm(q, k.transpose(1, 2))
+    if attn_mask is not None:
+        attn = attn + attn_mask
+    attn = F.softmax(attn, dim=-1)
+    out = torch.bmm(attn, v).transpose(0, 1).contiguous().view(tgt_len, bsz, embed_dim)
+    out = self_.out_proj(out)
+    if self_.batch_first:
+        out = out.transpose(0, 1)
+    if not need_weights:
+        return out, None
+    attn = attn.view(bsz, num_heads, tgt_len, src_len)
+    return out, (attn.mean(dim=1) if average_attn_weights else attn)
 
 
 def spec_cac(mix: torch.Tensor, model) -> torch.Tensor:
@@ -75,6 +147,8 @@ class SplitHTDemucs(nn.Module):
 def main():
     out = Path(sys.argv[1])
     check = "--no-check" not in sys.argv
+    import demucs
+    print(f"demucs {demucs.__version__}, torch {torch.__version__}")
     bag = get_model("htdemucs")
     model = bag.models[0]
     model.eval()
