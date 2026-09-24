@@ -5,7 +5,8 @@
 #![cfg(feature = "ort-backend")]
 
 use charon_audio::{
-    AudioBuffer, AudioFile, BitDepth, ModelConfig, Separator, SeparatorConfig, StemFormat,
+    AudioBuffer, AudioFile, BitDepth, ExecutionProvider, ModelConfig, Separator, SeparatorConfig,
+    StemFormat,
 };
 use ndarray::Array2;
 use std::path::PathBuf;
@@ -169,4 +170,46 @@ fn flac_and_int_wav_round_trip_through_symphonia() {
         );
     }
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The split contract with an identity model: the time branch returns the
+/// mix and the spectral branch zeros, so stems must equal the input after
+/// charon's STFT, inference, iSTFT and sum. Segment lengths cover partial
+/// STFT frames.
+#[test]
+fn split_contract_identity_round_trips() {
+    for segment in [8192usize, 12000] {
+        let mut model = ModelConfig::htdemucs_split(fixture("identity_split.onnx"));
+        model.segment_samples = Some(segment);
+        model.onnx.execution_provider = ExecutionProvider::Cpu;
+        let mut config = SeparatorConfig {
+            model,
+            ..SeparatorConfig::default()
+        }
+        .with_progress(false);
+        config.process.segment_length = None;
+        let separator = Separator::new(config).unwrap();
+        for samples in [segment - 1, segment, segment * 5 / 2] {
+            let input = signal(samples, samples as u64 + 3);
+            let stems = separator
+                .separate(&AudioBuffer::new(input.clone(), 44100))
+                .unwrap();
+            for name in stems.list() {
+                let stem = stems.get(&name).unwrap();
+                let max_err = stem
+                    .data
+                    .iter()
+                    .zip(input.iter())
+                    .map(|(a, b)| {
+                        assert!(a.is_finite());
+                        (a - b).abs()
+                    })
+                    .fold(0.0f32, f32::max);
+                assert!(
+                    max_err < 1e-5,
+                    "segment {segment}, {samples} samples, {name}: {max_err}"
+                );
+            }
+        }
+    }
 }

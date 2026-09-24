@@ -54,6 +54,18 @@ impl SeparatorConfig {
         }
     }
 
+    /// Configuration for the split-transform HTDemucs export
+    /// (see [`ModelConfig::htdemucs_split`])
+    #[cfg(feature = "ort-backend")]
+    pub fn htdemucs_split<P: AsRef<Path>>(model_path: P) -> Self {
+        let mut model = ModelConfig::htdemucs_split(model_path);
+        model.backend = Some(ModelBackend::OnnxRuntime);
+        Self {
+            model,
+            ..Self::default()
+        }
+    }
+
     /// Set number of ensemble shifts
     pub fn with_shifts(mut self, shifts: usize) -> Self {
         self.process.shifts = shifts;

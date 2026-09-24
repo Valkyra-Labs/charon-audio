@@ -1,10 +1,11 @@
 //! Example: Separate audio file into stems
 //!
 //! Usage: separate <input_audio> [output_dir] [model_path] [--shifts N]
-//!        [--format wav16|wav24|wav32|flac16|flac24] [--max-speed]
+//!        [--format wav16|wav24|wav32|flac16|flac24] [--max-speed] [--split]
+//!        [--ep cpu|coreml|auto]
 
-use charon_audio::OnnxOptions;
 use charon_audio::{BitDepth, Separator, SeparatorConfig, StemFormat};
+use charon_audio::{ExecutionProvider, OnnxOptions};
 use std::env;
 
 fn main() -> anyhow::Result<()> {
@@ -14,6 +15,8 @@ fn main() -> anyhow::Result<()> {
     let mut shifts = 1usize;
     let mut format = StemFormat::default();
     let mut max_speed = false;
+    let mut split = false;
+    let mut ep = None;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -29,11 +32,19 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             "--max-speed" => max_speed = true,
+            "--split" => split = true,
+            "--ep" => {
+                ep = Some(match args.next().expect("--ep NAME").as_str() {
+                    "cpu" => ExecutionProvider::Cpu,
+                    "coreml" => ExecutionProvider::CoreMl,
+                    _ => ExecutionProvider::Auto,
+                })
+            }
             _ => positional.push(arg),
         }
     }
     if positional.is_empty() {
-        eprintln!("Usage: separate <input_audio> [output_dir] [model_path] [--shifts N] [--format wav16|wav24|wav32|flac16|flac24] [--max-speed]");
+        eprintln!("Usage: separate <input_audio> [output_dir] [model_path] [--shifts N] [--format wav16|wav24|wav32|flac16|flac24] [--max-speed] [--split] [--ep cpu|coreml|auto]");
         std::process::exit(1);
     }
 
@@ -53,11 +64,18 @@ fn main() -> anyhow::Result<()> {
     println!();
 
     // HTDemucs ONNX export: 4 stems, fixed 7.8 s segments
-    let mut config = SeparatorConfig::htdemucs(model_path)
-        .with_shifts(shifts)
-        .with_progress(true);
+    let mut config = if split {
+        SeparatorConfig::htdemucs_split(model_path)
+    } else {
+        SeparatorConfig::htdemucs(model_path)
+    }
+    .with_shifts(shifts)
+    .with_progress(true);
     if max_speed {
         config.model.onnx = OnnxOptions::max_speed();
+    }
+    if let Some(ep) = ep {
+        config.model.onnx.execution_provider = ep;
     }
 
     println!("Loading model...");

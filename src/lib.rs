@@ -39,13 +39,16 @@ pub mod processor;
 #[cfg(feature = "realtime")]
 pub mod realtime;
 pub mod separator;
+pub mod stft;
 pub mod utils;
 
 // Re-export main types
 pub use audio::{AudioBuffer, AudioFile, AudioFormat, BitDepth};
 pub use error::{CharonError, Result};
 pub use model_zoo::{ModelMetadata, ModelZoo};
-pub use models::{ExecutionProvider, ModelBackend, ModelConfig, OnnxOptions, OptimizationLevel};
+pub use models::{
+    ExecutionProvider, ModelBackend, ModelConfig, ModelContract, OnnxOptions, OptimizationLevel,
+};
 #[allow(deprecated)]
 pub use performance::{AudioKNN, BatchProcessor, PerformanceHint, PerformanceHints, SimdOps};
 pub use processor::{ProcessConfig, Processor};
