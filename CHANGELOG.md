@@ -64,6 +64,14 @@
 - Declared `rust-version = "1.89"`, measured with the committed lockfile.
   Rust 1.86 fails. 1.87 and 1.88 were not tested.
 
+### Deprecated
+- `performance` module (`SimdOps`, `AudioKNN`, `BatchProcessor`,
+  `PerformanceHint(s)`): unused by the pipeline, kept for 0.1.0 API
+  compatibility, removed in 0.2.
+- `ModelZoo` now lists one real entry (HTDemucs, with URL and SHA-256)
+  instead of three placeholders with `example.com` URLs. It still does
+  not download.
+
 ### Removed (tombstones)
 - `candle-backend` feature, `ModelBackend::Candle`, `CandleModel`,
   `SeparatorConfig::candle`. The backend was an identity placeholder,

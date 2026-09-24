@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! Example: Advanced audio processing with performance optimizations
 
 use charon_audio::{AudioKNN, BatchProcessor, PerformanceHint, PerformanceHints, SimdOps};
