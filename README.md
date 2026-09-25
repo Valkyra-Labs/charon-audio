@@ -105,7 +105,7 @@ processes load it in about 7 s.
 ### C. The `charon` binary and the resident server
 
 ```bash
-cargo build --release --features coreml --bin Charon
+cargo build --release --features coreml --bin charon
 ```
 
 One-shot (same as the example):
