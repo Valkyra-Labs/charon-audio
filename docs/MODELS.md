@@ -1,6 +1,8 @@
 # Models: artifacts, verification and hosting
 
-charon ships no weights. Three ONNX files are supported, all derived from
+**Charon ships no weights.**
+
+Three ONNX files are supported, all derived from
 the `htdemucs` checkpoint of demucs 4.1.0 (drums, bass, other, vocals).
 
 | file | contract | provider | SHA-256 | size (bytes) | how to get it |
@@ -34,41 +36,10 @@ the hosting account before uploading, and say in the model card that
 the weights come from `facebookresearch/demucs` (Rouard, Massa,
 Défossez, ICASSP 2023) and were converted, not trained.
 
-## Hosting process (to be done by the account owner)
+## Hosting
 
-The split exports are not hosted yet. Steps, once the license question
-is settled:
-
-1. Create a model repository, for example
-   `https://huggingface.co/<org>/charon-htdemucs-onnx`, with a model card
-   that states the source checkpoint, the export script commit, the
-   demucs/torch versions (4.1.0 / 2.14.0), the hashes above, the
-   contract of each file, and the license position.
-2. Upload the two files and `SHA256SUMS`:
-
-   ```bash
-   pip install huggingface_hub
-   ```
-
-   ```bash
-   huggingface-cli upload <org>/charon-htdemucs-onnx ~/Music/Charon/models/htdemucs_split.onnx htdemucs_split.onnx
-   ```
-
-   ```bash
-   huggingface-cli upload <org>/charon-htdemucs-onnx ~/Music/Charon/models/htdemucs_split_coreml.onnx htdemucs_split_coreml.onnx
-   ```
-
-   The local copies with verified hashes are in `~/Music/Charon/models/`
-   on the development machine.
-3. Fill the `url` fields in `models/manifest.json` and the
-   `download_url` of the `htdemucs-split*` entries in `src/model_zoo.rs`.
-4. Add the split-model regression test to the weekly CI job
-   (`.github/workflows/ci.yml`, `real-model` job): download by URL,
-   check the hash, run
-   `CHARON_HTDEMUCS_SPLIT_MODEL=... cargo test --release --features coreml --test htdemucs -- --ignored`
-   on the macOS runner.
-5. Re-run `tools/parity/compare.py` on the downloaded files against
-   `ref_torch` to confirm the hosted bytes are the measured ones.
-
-A GitHub release asset works the same way (files up to 2 GB); use the
-release URL in the manifest.
+The split exports are not hosted yet; produce them with the export
+script as shown in the README. Once they are published, the `url`
+fields in `models/manifest.json` and the `download_url` entries in
+`ModelZoo` will point at them, and the weekly CI job will verify the
+hosted files against the hashes above.
