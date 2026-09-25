@@ -321,7 +321,11 @@ is not byte-stable. Verify a re-export structurally, not by hash. Summary of the
 | split tiled, CoreML | 13.4 s | 2.6 GB | 5.6 s |
 | PyTorch CPU / MPS | 35.5 / 9.0 s | 2.3 / 2.0 GB | |
 
-Still open: the 7 s CoreML load per process (Apple's compile of the
-cached program; no ORT option changes it; a resident process avoids it),
-and ONNX Runtime's 2-3 GB activation memory on the CPU provider.
+Closed later the same day: the `charon serve` resident server pays the
+CoreML load once; jobs then take 6.2-6.4 s per 193 s track
+(`2026-09-25-final-head-to-head.md`). Measured about the load itself:
+7 s when macOS's compiled-model cache is warm, about 27 s otherwise,
+with ORT's on-disk cache entry untouched in both cases (its mtime does
+not change), so the recompile is Apple's, not ORT's. Still open:
+ONNX Runtime's 2-3 GB activation memory on the CPU provider.
 
