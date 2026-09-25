@@ -1,6 +1,8 @@
 # Models: artifacts, verification and hosting
 
-charon ships no weights. Three ONNX files are supported, all derived from
+**Charon ships no weights.**
+
+Three ONNX files are supported, all derived from
 the `htdemucs` checkpoint of demucs 4.1.0 (drums, bass, other, vocals).
 
 | file | contract | provider | SHA-256 | size (bytes) | how to get it |
@@ -36,4 +38,8 @@ Défossez, ICASSP 2023) and were converted, not trained.
 
 ## Hosting
 
-The split exports are not hosted yet.
+The split exports are not hosted yet; produce them with the export
+script as shown in the README. Once they are published, the `url`
+fields in `models/manifest.json` and the `download_url` entries in
+`ModelZoo` will point at them, and the weekly CI job will verify the
+hosted files against the hashes above.

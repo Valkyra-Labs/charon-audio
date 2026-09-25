@@ -26,13 +26,13 @@ references are to the 0.1.1 sources.
    edges.
 5. **Shifts** (`Processor::process_shifted`, optional): zero-pad half a
    second on both sides, run at evenly spaced offsets, average. Demucs
-   draws random offsets; charon's are deterministic.
+   draws random offsets; Charon's are deterministic.
 6. **Model** (`OnnxModel::infer`, `src/models.rs`), one of two contracts:
    - `Waveform`: `mix [1, 2, 343980]` in, `stems [1, 4, 2, 343980]` out.
      The in-graph export.
    - `DemucsSplit`: `mix` plus the complex-as-channels spectrogram
      `spec [1, 4, 2048, 336]` in; `time [1, 4, 2, 343980]` and
-     `spec_out [1, 4, 4, 2048, 336]` out; charon computes
+     `spec_out [1, 4, 4, 2048, 336]` out; Charon computes
      `stems = time + ispec(spec_out)`. The spectrogram is
      `HTDemucs._magnitude(_spec(mix))`: reflect-pad by `hop/2*3`, align
      to a multiple of `hop`, `torch.stft` (periodic Hann 4096, hop 1024,

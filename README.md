@@ -41,7 +41,7 @@ version whose inference was a placeholder. Do not use it.
 ## Quick start
 
 Three model files exist. The in-graph export runs on the CPU only and
-can be downloaded. The split-transform exports (STFT/iSTFT in charon)
+can be downloaded. The split-transform exports (STFT/iSTFT in Charon)
 are faster and currently have to be exported by you: one graph for the
 CPU provider and one for CoreML (the CoreML provider needs the time
 branch's convolutions tiled; that tiling costs 10% on the CPU).
@@ -105,7 +105,7 @@ processes load it in about 7 s.
 ### C. The `charon` binary and the resident server
 
 ```bash
-cargo build --release --features coreml --bin charon
+cargo build --release --features coreml --bin Charon
 ```
 
 One-shot (same as the example):
@@ -148,7 +148,7 @@ fn main() -> anyhow::Result<()> {
 drums, bass, other, vocals) and the low-memory ONNX Runtime preset.
 `SeparatorConfig::htdemucs_split` sets the split contract (`mix` and a
 complex-as-channels spectrogram `spec` `[1, 4, 2048, 336]` in; `time`
-`[1, 4, 2, 343980]` and `spec_out` `[1, 4, 4, 2048, 336]` out; charon
+`[1, 4, 2, 343980]` and `spec_out` `[1, 4, 4, 2048, 336]` out; Charon
 does `HTDemucs._spec`/`_ispec` and sums the branches). The processing
 settings follow Demucs: 7.8 s segments, 25% overlap, triangular
 overlap-add weights, normalization by the mono reference mean and
@@ -165,7 +165,7 @@ config.model.onnx = OnnxOptions::max_speed();
 
 The HTDemucs code is MIT. The weights carry no license statement from
 their authors; the ONNX export on Hugging Face is re-hosted by a third
-party under MIT on their own interpretation. charon does not vendor or
+party under MIT on their own interpretation. Charon does not vendor or
 redistribute the weights. Check the terms for your use before shipping
 them.
 
@@ -188,10 +188,10 @@ Every record carries build hash, model hash, versions, host and method;
   5.58 GB (`max_speed`); 26.4 s end to end.
 - Head-to-head on the same track and machine against PyTorch (CPU,
   MPS, cold and resident), stem-splitter-core and demucs-rs: resident
-  charon on CoreML 6.2-6.4 s, PyTorch MPS resident 7.3-7.6 s, PyTorch
-  MPS cold 8.7 s, demucs-rs 13.7 s (with NaN output), charon cold
+  Charon on CoreML 6.2-6.4 s, PyTorch MPS resident 7.3-7.6 s, PyTorch
+  MPS cold 8.7 s, demucs-rs 13.7 s (with NaN output), Charon cold
   14.1 s CoreML / 16.7 s CPU, stem-splitter-core 27.3 s, PyTorch CPU
-  35.2 s. Quality on MUSDB previews: charon equals PyTorch,
+  35.2 s. Quality on MUSDB previews: Charon equals PyTorch,
   stem-splitter-core 0.2-0.3 dB lower, demucs-rs lower with 6 of 50
   tracks NaN.
 

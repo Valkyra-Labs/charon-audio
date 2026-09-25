@@ -7,19 +7,19 @@ this file is the public summary with the same numbers, and the scripts
 that produced them are in `tools/parity/`.
 
 Host for everything below: Apple M4 Pro (14 CPU cores, GPU), 24 GB,
-macOS 26.6. charon: ort `=2.0.0-rc.13` (ONNX Runtime 1.28.0), release
+macOS 26.6. Charon: ort `=2.0.0-rc.13` (ONNX Runtime 1.28.0), release
 build, default features plus `coreml` where stated. Reference: demucs
 4.1.0, torch 2.14.0. Dates: 2026-09-24 and 2026-09-25.
 
 ## Parity with PyTorch Demucs
 
-Method: the same input to charon and to `demucs.api.Separator("htdemucs",
+Method: the same input to Charon and to `demucs.api.Separator("htdemucs",
 shifts=0, overlap=0.25, split=True)`; max absolute sample difference and
 agreement SDR `10*log10(sum(ref^2)/sum((ref-est)^2))` per stem. Agreement
 SDR measures how closely two pipelines agree; it is not separation
 quality.
 
-| input | charon path | max diff (worst stem) | agreement |
+| input | Charon path | max diff (worst stem) | agreement |
 |---|---|---|---|
 | 3 synthetic clips (5, 20, 31.3 s) | in-graph export, CPU | 1.2e-4 | 66.8-90.0 dB |
 | 3 synthetic clips | split export, CPU | 1.2e-4 | 66.7-90.0 dB |
@@ -45,7 +45,7 @@ so not comparable with published MUSDB tables. Script:
 
 | tool | drums | bass | other | vocals | non-finite output |
 |---|---|---|---|---|---|
-| charon (in-graph CPU, split CPU, split CoreML: identical) | 9.50 | 9.04 | 5.19 | 8.88 | 0 tracks |
+| Charon (in-graph CPU, split CPU, split CoreML: identical) | 9.50 | 9.04 | 5.19 | 8.88 | 0 tracks |
 | PyTorch demucs 4.1.0 | 9.50 | 9.04 | 5.19 | 8.88 | 0 |
 | stem-splitter-core 1.2.0 | 9.31 | 8.76 | 4.89 | 8.55 | 0 |
 | demucs-rs 5d9f61a (Metal) | 9.33 | 8.94 | 5.13 | 7.48 | 6 of 50 |
@@ -64,16 +64,16 @@ model loaded once, three consecutive jobs. Script:
 
 | tool | device | mode | wall | peak RSS |
 |---|---|---|---|---|
-| charon `serve` | CoreML | resident | 6.15 / 6.27 / 6.39 s | server 1.5-1.6 GB, client 8 MB |
+| Charon `serve` | CoreML | resident | 6.15 / 6.27 / 6.39 s | server 1.5-1.6 GB, client 8 MB |
 | PyTorch demucs 4.1.0 | MPS | resident (`demucs.api`) | 7.32 / 7.35 / 7.59 s | |
 | PyTorch demucs 4.1.0 | MPS | cold | 8.67 s | 1.96 GB |
 | demucs-rs 5d9f61a | Metal | cold | 13.70 s | 0.88 GB (NaN in 53% of frames) |
-| charon one-shot | CoreML | cold | 14.08 s | 2.6 GB |
-| charon one-shot | CPU | cold | 16.70 s | 3.5 GB |
+| Charon one-shot | CoreML | cold | 14.08 s | 2.6 GB |
+| Charon one-shot | CPU | cold | 16.70 s | 3.5 GB |
 | stem-splitter-core 1.2.0 | CPU | cold | 27.28 s | 4.9 GB |
 | PyTorch demucs 4.1.0 | CPU | resident | 33.8 s | |
 | PyTorch demucs 4.1.0 | CPU | cold | 35.20 s | 2.6 GB |
-| charon 0.1.1 before this work (in-graph export, CPU) | CPU | cold | 26.4 s | 2.1 GB |
+| Charon 0.1.1 before this work (in-graph export, CPU) | CPU | cold | 26.4 s | 2.1 GB |
 
 Separation only (`examples/profile`), split exports: 16.6 s on CPU
 (RTF 11.6), 5.6 s on CoreML (RTF 34). A cold CoreML process spends
