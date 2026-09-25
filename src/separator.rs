@@ -310,6 +310,14 @@ impl Separator {
         Ok(())
     }
 
+    /// Execution provider the model runs on ("CPU" or "CoreML")
+    pub fn provider(&self) -> &'static str {
+        match self.model {
+            #[cfg(feature = "ort-backend")]
+            Model::Onnx(ref m) => m.provider(),
+        }
+    }
+
     /// Get model configuration
     pub fn model_config(&self) -> &ModelConfig {
         &self.config.model
