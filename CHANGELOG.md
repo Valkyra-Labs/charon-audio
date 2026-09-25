@@ -26,7 +26,7 @@
   Measured on a 193 s track (M4 Pro): separation 5.6 s on CoreML vs
   16.6 s on CPU with the split exports and 22.8 s with the in-graph
   export; end to end 13.4 s vs 17.1 s vs 26.4 s
-  (`docs/parity/2026-09-25-gpu-and-speed.md`). CoreML output agrees
+  (`docs/MEASUREMENTS.md`). CoreML output agrees
   with PyTorch to 2e-6.
 - `charon` binary: `separate`, `serve` (resident server over a Unix
   socket, JSON lines), `ping`, `stop`. With the server warm a 193 s track
@@ -51,7 +51,7 @@
   `OnnxOptions::low_memory()` (the HTDemucs preset default) and
   `OnnxOptions::max_speed()` (ONNX Runtime defaults). Measured on a
   193 s track: peak RSS 5.58 GB -> 2.12 GB for an 11% throughput cost
-  (`docs/parity/2026-09-24-memory.md`).
+  (`docs/MEASUREMENTS.md`).
 - Output formats: `StemFormat` with WAV 16/24-bit int and 32-bit float,
   and FLAC 16/24-bit (`flacenc`). `Stems::save_all_as`,
   `AudioFile::write_wav_with_depth`, `AudioFile::write_flac`.
@@ -59,10 +59,13 @@
   takes `--shifts`, `--format`, `--max-speed`.
 - CI workflow: fmt, clippy and tests over the feature matrix on Linux and
   macOS, MSRV check, docs, and a weekly run of the real-model test.
-- Records under `docs/parity/`: memory/throughput cells, head-to-head
-  against PyTorch Demucs (CPU, MPS), stem-splitter-core and demucs-rs on
-  one machine, MUSDB18 preview quality for all of them, and shift
-  ensemble gain.
+- `docs/MEASUREMENTS.md`: parity, MUSDB18 preview quality, memory and
+  provider experiments, head-to-head against PyTorch Demucs (CPU, MPS,
+  cold and resident), stem-splitter-core and demucs-rs on one machine,
+  and shift ensemble gain. `docs/MODELS.md` and `models/manifest.json`:
+  artifacts, hashes, hosting steps. `docs/IMPLEMENTATION.md`,
+  `docs/CONTRIBUTING.md`, `docs/SUMMARY.md` rewritten to describe the
+  code as it is.
 - `Stems::from_ordered`. `Stems::list` and `save_all` follow model
   output order.
 
@@ -115,7 +118,7 @@
 - Only HTDemucs is supported. Other ONNX models need their own contract.
 - GPU: CoreML only (macOS, `coreml` feature, split export). The in-graph
   STFT export fails on the ORT 1.28 CoreML provider in every
-  configuration tried (`docs/parity/2026-09-24-memory.md`). CUDA has not
+  configuration tried (`docs/MEASUREMENTS.md`). CUDA has not
   been measured (no hardware). WebGPU runs but is slower than CPU.
 - The split exports are not hosted yet; produce them with
   `tools/export/export_htdemucs.py --target cpu|coreml` (needs PyTorch

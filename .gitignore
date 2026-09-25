@@ -33,3 +33,11 @@ benches/data/
 
 # Python
 __pycache__/
+
+# Local measurement records and audits, kept out of the repository
+/docs/audit/
+/docs/parity/
+
+# Model files live next to the manifest only locally
+/models/*.onnx
+/models/coreml-cache/

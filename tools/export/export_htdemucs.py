@@ -28,7 +28,7 @@ most 16384 samples, which is what ONNX Runtime's CoreML provider accepts
 1-D operators; 10% slower than the CPU-target graph on the CPU provider.
 `--batch N` bakes a batch of N segments into the graph; the default is 1
 and batching measured slower on both providers.
-Measurements: docs/parity/2026-09-25-gpu-and-speed.md.
+Measurements: docs/MEASUREMENTS.md.
 """
 import math, sys, types, hashlib
 from pathlib import Path

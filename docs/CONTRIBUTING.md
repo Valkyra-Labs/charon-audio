@@ -1,131 +1,98 @@
-# Contributing to Charon
+# Contributing
 
-Thank you for your interest in contributing to Charon! This document provides guidelines and instructions for contributing.
+## Ground rules
 
-## Getting Started
+- Every claim in the README is backed by a test in this repository or a
+  recorded measurement (`docs/MEASUREMENTS.md`). A change that alters a
+  number changes the record too.
+- One variable per measurement. A commit that changes two things gives
+  an unattributable result.
+- Numbers from papers, model cards or vendors are hypotheses until
+  reproduced here on a stated load shape.
+- Nothing is "done" because it compiles. The acceptance gate is below.
 
-1. Fork the repository
-2. Clone your fork: `git clone https://github.com/yourusername/charon.git`
-3. Add upstream: `git remote add upstream https://github.com/Valkyra-Labs/charon.git`
-3. Create a feature branch: `git checkout -b feature/amazing-feature`
-4. Make your changes
-5. Run tests: `cargo test --all`
-6. Run benchmarks: `cargo bench`
-7. Commit your changes: `git commit -am 'Add amazing feature'`
-8. Push to the branch: `git push origin feature/amazing-feature`
-9. Open a Pull Request
+## Acceptance gate
 
-## Development Setup
-
-### Prerequisites
-
-- Rust 1.70 or later
-- (Optional) CUDA toolkit for GPU acceleration
-- (Optional) ONNX Runtime for model testing
-
-### Building
+Run all of this before opening a pull request; CI runs the same set.
 
 ```bash
-# Debug build
-cargo build
-
-# Release build (optimized)
-cargo build --release
-
-# With all features
-cargo build --all-features
+cargo fmt --all -- --check
 ```
-
-### Testing
 
 ```bash
-# Run all tests
-cargo test --all
-
-# Run specific module tests
-cargo test --lib audio
-
-# Run with output
-cargo test -- --nocapture
-
-# Run integration tests
-cargo test --test '*'
+cargo clippy --all-targets -- -D warnings
 ```
-
-### Benchmarking
 
 ```bash
-# Run all benchmarks
-cargo bench
-
-# Run specific benchmark
-cargo bench --bench audio_bench
+cargo clippy --all-targets --no-default-features -- -D warnings
 ```
 
-## Code Style
+```bash
+cargo test
+```
 
-- Follow Rust standard formatting: `cargo fmt`
-- Run clippy for linting: `cargo clippy -- -D warnings`
-- Write documentation for public APIs
-- Include tests for new functionality
+```bash
+cargo test --no-default-features
+```
 
-## Areas for Contribution
+On macOS also:
 
-### High Priority
+```bash
+cargo clippy --all-targets --all-features -- -D warnings && cargo test --all-features
+```
 
-- [x] Complete Candle backend implementation
-- [x] Real-time CPAL integration
-- [x] Pre-trained model zoo
-- [x] WebAssembly support
+`--all-features` includes `coreml` and `ep-experimental`, which need
+ONNX Runtime builds that exist for macOS only; on Linux use
+`--features realtime` (needs `libasound2-dev`).
 
-### Medium Priority
+With a model present, the real-model regression tests:
 
-- [ ] Additional audio processing algorithms
-- [ ] More comprehensive tests
-- [ ] Performance optimizations
-- [ ] Documentation improvements
+```bash
+CHARON_HTDEMUCS_MODEL=/path/htdemucs.onnx CHARON_HTDEMUCS_SPLIT_MODEL=/path/htdemucs_split_coreml.onnx cargo test --release --features coreml -- --ignored
+```
 
-### Low Priority
+## Toolchain
 
-- [ ] Python bindings (PyO3)
-- [ ] GUI application
-- [ ] Additional examples
-- [ ] Benchmarking suite expansion
+Rust 1.89 or later (`rust-version` in `Cargo.toml`, checked in CI with
+`--locked`). `Cargo.lock` is committed: `ort` is a release candidate
+whose API changes between RCs, so the lockfile is part of the build.
+Bump `ort` deliberately and re-run the gate.
 
-## Commit Messages
+Python is needed only for the export and parity tools
+(`tools/export/`, `tools/parity/`): demucs 4.1.0, torch, onnx,
+onnxruntime, soundfile, numpy. Pin demucs; other packages that depend on
+`demucs` have replaced it with an older version before.
 
-Follow conventional commits format:
+## Layout
 
-- `feat:` - New feature
-- `fix:` - Bug fix
-- `docs:` - Documentation changes
-- `style:` - Code style changes (formatting, etc.)
-- `refactor:` - Code refactoring
-- `perf:` - Performance improvements
-- `test:` - Adding or updating tests
-- `chore:` - Maintenance tasks
+- `src/audio.rs`: decoding (Symphonia), resampling (rubato), WAV/FLAC
+  writing.
+- `src/stft.rs`: `HTDemucs._spec`/`_ispec` with realfft, fixture-tested
+  against `torch.stft`.
+- `src/models.rs`: ONNX Runtime session, `ModelContract`, `OnnxOptions`,
+  execution providers.
+- `src/processor.rs`: segmentation, overlap-add, shifts, normalization
+  (follows demucs 4.1.0 `apply_model`).
+- `src/separator.rs`: `Separator`, `SeparatorConfig`, `Stems`.
+- `src/bin/charon.rs`: the CLI and the resident server.
+- `tests/pipeline.rs`: whole pipeline through tiny identity ONNX models
+  (`tests/fixtures/make_identity_*.py`).
+- `tests/htdemucs.rs`: ignored tests against PyTorch envelopes.
+- `tools/export/`: the ONNX export; `tools/parity/`: measurement scripts.
 
-Example: `feat: add SIMD-optimized convolution operator`
+## Adding a model
 
-## Pull Request Process
+1. Define its tensor contract (`ModelContract`) and a preset on
+   `ModelConfig`/`SeparatorConfig`.
+2. Add an identity ONNX fixture for the contract and a pipeline test.
+3. Measure parity against the model's reference implementation on real
+   input (max difference at most 1e-3) and its quality on the MUSDB18
+   previews with `tools/parity/musdb_eval.py`. Record both.
+4. Add the file's hash and license position to `docs/MODELS.md` and
+   `models/manifest.json`.
 
-1. Update documentation if needed
-2. Add tests for new functionality
-3. Ensure all tests pass
-4. Update CHANGELOG.md if applicable
-5. Request review from maintainers
+## Commits and pull requests
 
-## Code of Conduct
-
-- Be respectful and inclusive
-- Welcome newcomers
-- Accept constructive criticism gracefully
-- Focus on what's best for the community
-
-## Questions?
-
-Open an issue or start a discussion on GitHub!
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the MIT License.
+Commit messages: `<type>(<crate>): <short description>` with type in
+feat, fix, refactor, test, docs, chore. A pull request states what was
+measured, on what, and what the numbers were before and after.
