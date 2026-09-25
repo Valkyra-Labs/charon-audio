@@ -28,6 +28,10 @@
   export; end to end 13.4 s vs 17.1 s vs 26.4 s
   (`docs/parity/2026-09-25-gpu-and-speed.md`). CoreML output agrees
   with PyTorch to 2e-6.
+- `charon` binary: `separate`, `serve` (resident server over a Unix
+  socket, JSON lines), `ping`, `stop`. With the server warm a 193 s track
+  takes 6.3 s on CoreML end to end, against 13.4 s cold (the 7 s CoreML
+  load is paid once per server).
 - Real ONNX inference. `OnnxModel::infer` runs the session and maps the
   `[1, sources, channels, samples]` output onto the stems. Tensor names
   and a fixed segment length are set per model (`ModelConfig::input_name`,

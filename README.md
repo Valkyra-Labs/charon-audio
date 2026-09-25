@@ -20,13 +20,14 @@ every number in this file has a measurement record under
 | Output: WAV 16/24-bit int, 32-bit float; FLAC 16/24-bit | Works, round-trip tested. |
 | Resampling to the model rate (rubato) | Works, time-aligned (impulse tests). |
 | Memory | Split export: 3.4 GB peak on CPU, 2.6 GB on CoreML (ONNX Runtime activation memory). In-graph export: 2.1 GB with its low-memory preset. [Memory record](docs/parity/2026-09-24-memory.md), [GPU record](docs/parity/2026-09-25-gpu-and-speed.md). |
-| Speed, 193 s track on an Apple M4 Pro | Split export: 17.1 s CPU, 13.4 s CoreML end to end (of which 7 s is the CoreML model load and 5.6 s the separation). In-graph export: 26.4 s. PyTorch: 35.5 s CPU, 9.0 s MPS. [Head-to-head](docs/parity/2026-09-24-head-to-head.md), [GPU record](docs/parity/2026-09-25-gpu-and-speed.md). |
+| Speed, 193 s track on an Apple M4 Pro | Resident server on CoreML: 6.2-6.4 s per track (PyTorch on MPS, model resident: 7.3-7.6 s). Cold process: 14.1 s CoreML, 16.7 s CPU (PyTorch cold: 8.7 s MPS, 35.2 s CPU). [Final head-to-head](docs/parity/2026-09-25-final-head-to-head.md). |
 | Other models (MDX-Net, RoFormer, Open-Unmix, htdemucs_ft/6s) | **Not supported.** Each needs its own tensor contract and parity check. |
 | CUDA, WebGPU | **Not supported.** CUDA is unmeasured (no hardware). WebGPU runs the in-graph export but slower than CPU. |
 | Split export hosting | The split models are not hosted yet. Produce them with `tools/export/export_htdemucs.py` (PyTorch + demucs 4.1.0). The CPU export is byte-for-byte reproducible; the CoreML export reproduces the same weights, names and operators but not the same bytes (dynamo exporter serialization). Hashes of the measured artifacts are recorded. |
 | Real-time (CPAL) | Experimental, behind the `realtime` feature, not real-time safe, no tests. |
 | Model download / zoo | Not implemented. `ModelZoo` holds metadata only; download the model yourself (below). |
-| CLI binary, C ABI, Python bindings | Not in this release. |
+| `charon` binary | `charon separate`, and `charon serve`: a resident server that keeps the model (and the compiled CoreML model) loaded and answers jobs over a Unix socket. 6.3 s per 193 s track on CoreML with the server warm. |
+| C ABI, Python bindings | Not in this release. |
 
 The published crate `charon-audio 0.1.0` on crates.io is an earlier
 version whose inference was a placeholder. Do not use it.
@@ -93,8 +94,36 @@ cargo run --release --features coreml --example separate -- song.mp3 stems/ htde
 
 `--ep cpu|coreml|auto` picks the provider (default `auto`: CoreML if it
 builds, else CPU). The first CoreML run compiles the model (about 30 s)
-into `coreml-cache/` next to the model file; later runs load it in
-about 7 s.
+into `coreml-cache/<model hash>/` next to the model file; later
+processes load it in about 7 s.
+
+### C. The `charon` binary and the resident server
+
+```bash
+cargo build --release --features coreml --bin charon
+```
+
+One-shot (same as the example):
+
+```bash
+target/release/charon separate song.mp3 -o stems/ --model htdemucs_split_coreml.onnx --format flac24
+```
+
+Resident: the server pays the model load once; each job then costs only
+decode + separation + write (6.3 s for a 193 s track on an M4 Pro):
+
+```bash
+target/release/charon serve --model htdemucs_split_coreml.onnx
+```
+
+```bash
+target/release/charon separate song.mp3 -o stems/
+```
+
+`charon separate` uses the server when its socket answers (default
+`$TMPDIR/charon-$USER.sock`, or `--socket`), otherwise it runs
+in-process with `--model`. `charon ping` and `charon stop` talk to the
+server. The protocol is one JSON object per line over a Unix socket.
 
 ### Library
 
@@ -151,8 +180,9 @@ model hash, versions, host and method. Summary, Apple M4 Pro, CPU:
   RSS 3.4 GB CPU, 2.6 GB CoreML.
 - In-graph export, 193 s track: 2.12 GB peak (low-memory preset),
   5.58 GB (`max_speed`); 26.4 s end to end.
-- Head-to-head on the same track and machine, see the
-  [head-to-head record](docs/parity/2026-09-24-head-to-head.md).
+- Head-to-head on the same track and machine against PyTorch (CPU,
+  MPS, cold and resident), stem-splitter-core and demucs-rs:
+  [final record](docs/parity/2026-09-25-final-head-to-head.md).
 
 ## Building
 
