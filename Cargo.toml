@@ -1,72 +1,80 @@
 [package]
 name = "charon-audio"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
+rust-version = "1.89"
 authors = ["Valkyra Labs"]
 license = "MIT"
-description = "Modern Rust music source separation library using state-of-the-art ML inference"
+description = "Rust music source separation pipeline for ONNX models"
 keywords = ["audio", "music", "separation", "ml", "demucs"]
 categories = ["multimedia::audio", "science"]
 readme = "README.md"
 repository = "https://github.com/Valkyra-Labs/charon-audio"
 homepage = "https://github.com/Valkyra-Labs/charon-audio"
 documentation = "https://docs.rs/charon-audio"
+exclude = [".github/", "tools/", "docs/audit/", "docs/parity/", "models/*.onnx"]
 
 [dependencies]
-# ML Inference - ONNX Runtime (fast, production-ready)
-ort = { version = "2.0.0-rc.9", features = ["download-binaries"], optional = true }
-candle-core = { version = "0.6", optional = true }
-candle-nn = { version = "0.6", optional = true }
-candle-transformers = { version = "0.6", optional = true }
+# ML inference. ONNX Runtime release candidates break API between RCs, so the
+# version is pinned exactly; bump deliberately.
+# Default features minus `ndarray` (tensors are passed as flat buffers, which
+# avoids compiling a second ndarray version) and `tracing`.
+ort = { version = "=2.0.0-rc.13", optional = true, default-features = false, features = [
+    "std",
+    "download-binaries",
+    "tls-native",
+    "copy-dylibs",
+    "api-27",
+] }
 
-# Audio I/O and Processing
-symphonia = { version = "0.5", features = ["all"] }
+# Audio I/O and processing
+# Codecs and containers are listed explicitly; "all" would also pull in
+# video/subtitle experiments and every metadata reader.
+symphonia = { version = "0.6", default-features = false, features = [
+    "opt-simd", "all-meta",
+    "aac", "adpcm", "alac", "flac", "mp1", "mp2", "mp3", "pcm", "vorbis",
+    "aiff", "caf", "isomp4", "mkv", "ogg", "wav",
+] }
 rubato = "0.15"
 hound = "3.5"
-cpal = "0.15"  # Real-time audio I/O
+flacenc = { version = "0.5", default-features = false, features = ["par"] }
+cpal = { version = "0.15", optional = true }
 
 # Numerical computing
 ndarray = { version = "0.15", features = ["rayon"] }
-num-traits = "0.2"
+realfft = "3.5"
+sha2 = { version = "0.10", optional = true }
 
 # Parallel processing
 rayon = "1.10"
 
 # Error handling
 thiserror = "1.0"
-anyhow = "1.0"
 
 # Utilities
 log = "0.4"
-env_logger = "0.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-
-# Progress bars
 indicatif = "0.17"
-
-# File system utilities
 walkdir = "2.5"
 
-# WebAssembly support
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
-serde-wasm-bindgen = "0.6"
-console_error_panic_hook = "0.1"
-web-sys = { version = "0.3", features = ["AudioContext", "AudioBuffer"] }
-
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+anyhow = "1.0"
 approx = "0.5"
+criterion = { version = "0.5", features = ["html_reports"] }
+env_logger = "0.11"
+libc = "0.2"
 
 [features]
 default = ["ort-backend"]
-ort-backend = ["ort"]
-candle-backend = ["candle-core", "candle-nn", "candle-transformers"]
-cuda = ["candle-core?/cuda", "ort?/cuda"]
-tensorrt = ["ort?/tensorrt"]
-metal = ["candle-core?/metal"]
-accelerate = ["candle-core?/accelerate"]
+ort-backend = ["dep:ort"]
+realtime = ["dep:cpal"]
+# Apple CoreML execution provider (macOS). Used by the split-transform
+# HTDemucs export; measured in docs/parity/2026-09-25-gpu-and-speed.md.
+coreml = ["ort-backend", "ort/coreml", "dep:sha2"]
+# GPU execution providers for measurement only (examples/ep_probe). Not a
+# supported path: see docs/parity for what was measured.
+ep-experimental = ["coreml", "ort/webgpu"]
 
 [package.metadata.docs.rs]
 features = ["ort-backend"]
@@ -76,6 +84,11 @@ rustdoc-args = ["--cfg", "docsrs"]
 name = "audio_bench"
 harness = false
 
+[[bin]]
+name = "charon"
+path = "src/bin/charon.rs"
+required-features = ["ort-backend"]
+
 [lib]
 name = "charon_audio"
 path = "src/lib.rs"
@@ -83,7 +96,28 @@ path = "src/lib.rs"
 [[example]]
 name = "separate"
 path = "examples/separate.rs"
+required-features = ["ort-backend"]
+
+[[example]]
+name = "batch"
+path = "examples/batch.rs"
+required-features = ["ort-backend"]
 
 [[example]]
 name = "realtime"
 path = "examples/realtime.rs"
+required-features = ["ort-backend"]
+
+[[example]]
+name = "profile"
+path = "examples/profile.rs"
+required-features = ["ort-backend"]
+
+[[example]]
+name = "ep_probe"
+path = "examples/ep_probe.rs"
+required-features = ["ort-backend"]
+
+[[example]]
+name = "advanced"
+path = "examples/advanced.rs"

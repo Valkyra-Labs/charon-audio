@@ -1,8 +1,10 @@
 //! Main separator API
 
-use crate::audio::{AudioBuffer, AudioFile};
+use crate::audio::{AudioBuffer, AudioFile, BitDepth};
 use crate::error::{CharonError, Result};
-use crate::models::{Model, ModelBackend, ModelConfig};
+#[cfg(feature = "ort-backend")]
+use crate::models::ModelBackend;
+use crate::models::{Model, ModelConfig};
 use crate::processor::{ProcessConfig, Processor};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
@@ -40,13 +42,28 @@ impl SeparatorConfig {
         config
     }
 
-    /// Create configuration for Candle backend
-    #[cfg(feature = "candle-backend")]
-    pub fn candle<P: AsRef<Path>>(model_path: P) -> Self {
-        let mut config = Self::default();
-        config.model.model_path = model_path.as_ref().to_path_buf();
-        config.model.backend = Some(ModelBackend::Candle);
-        config
+    /// Create configuration for the 4-stem HTDemucs ONNX export
+    /// (see [`ModelConfig::htdemucs`])
+    #[cfg(feature = "ort-backend")]
+    pub fn htdemucs<P: AsRef<Path>>(model_path: P) -> Self {
+        let mut model = ModelConfig::htdemucs(model_path);
+        model.backend = Some(ModelBackend::OnnxRuntime);
+        Self {
+            model,
+            ..Self::default()
+        }
+    }
+
+    /// Configuration for the split-transform HTDemucs export
+    /// (see [`ModelConfig::htdemucs_split`])
+    #[cfg(feature = "ort-backend")]
+    pub fn htdemucs_split<P: AsRef<Path>>(model_path: P) -> Self {
+        let mut model = ModelConfig::htdemucs_split(model_path);
+        model.backend = Some(ModelBackend::OnnxRuntime);
+        Self {
+            model,
+            ..Self::default()
+        }
     }
 
     /// Set number of ensemble shifts
@@ -68,16 +85,60 @@ impl SeparatorConfig {
     }
 }
 
+/// Output encoding for saved stems
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StemFormat {
+    Wav(BitDepth),
+    /// FLAC, 16 or 24 bit
+    Flac(BitDepth),
+}
+
+impl Default for StemFormat {
+    fn default() -> Self {
+        StemFormat::Wav(BitDepth::Float32)
+    }
+}
+
+impl StemFormat {
+    fn extension(self) -> &'static str {
+        match self {
+            StemFormat::Wav(_) => "wav",
+            StemFormat::Flac(_) => "flac",
+        }
+    }
+
+    fn write(self, path: &Path, buffer: &AudioBuffer) -> Result<()> {
+        match self {
+            StemFormat::Wav(depth) => AudioFile::write_wav_with_depth(path, buffer, depth),
+            StemFormat::Flac(depth) => AudioFile::write_flac(path, buffer, depth),
+        }
+    }
+}
+
 /// Separated audio stems
 pub struct Stems {
     /// Map of source name to audio buffer
     pub sources: HashMap<String, AudioBuffer>,
+    /// Source names in model output order
+    order: Vec<String>,
 }
 
 impl Stems {
-    /// Create new stems collection
+    /// Create new stems collection. Names are ordered alphabetically; use
+    /// [`Stems::from_ordered`] to keep a specific order.
     pub fn new(sources: HashMap<String, AudioBuffer>) -> Self {
-        Self { sources }
+        let mut order: Vec<String> = sources.keys().cloned().collect();
+        order.sort();
+        Self { sources, order }
+    }
+
+    /// Create stems from `(name, buffer)` pairs, keeping their order
+    pub fn from_ordered(stems: Vec<(String, AudioBuffer)>) -> Self {
+        let order = stems.iter().map(|(name, _)| name.clone()).collect();
+        Self {
+            sources: stems.into_iter().collect(),
+            order,
+        }
     }
 
     /// Get stem by name
@@ -85,14 +146,19 @@ impl Stems {
         self.sources.get(name)
     }
 
-    /// Save all stems to directory
+    /// Save all stems to directory as 32-bit float WAV
     pub fn save_all<P: AsRef<Path>>(&self, output_dir: P) -> Result<()> {
+        self.save_all_as(output_dir, StemFormat::default())
+    }
+
+    /// Save all stems to directory in the given format
+    pub fn save_all_as<P: AsRef<Path>>(&self, output_dir: P, format: StemFormat) -> Result<()> {
         let output_dir = output_dir.as_ref();
         std::fs::create_dir_all(output_dir)?;
 
-        for (name, buffer) in &self.sources {
-            let output_path = output_dir.join(format!("{name}.wav"));
-            AudioFile::write_wav(&output_path, buffer)?;
+        for name in &self.order {
+            let output_path = output_dir.join(format!("{name}.{}", format.extension()));
+            format.write(&output_path, &self.sources[name])?;
         }
 
         Ok(())
@@ -107,9 +173,9 @@ impl Stems {
         AudioFile::write_wav(path, buffer)
     }
 
-    /// List available stem names
+    /// List stem names in model output order
     pub fn list(&self) -> Vec<String> {
-        self.sources.keys().cloned().collect()
+        self.order.clone()
     }
 }
 
@@ -176,16 +242,23 @@ impl Separator {
             pb.finish_with_message("Separation complete!");
         }
 
-        // Build stems map
-        let mut sources = HashMap::new();
-        for (idx, buffer) in separated.into_iter().enumerate() {
-            if idx < self.config.model.sources.len() {
-                let name = &self.config.model.sources[idx];
-                sources.insert(name.clone(), buffer);
-            }
+        if separated.len() != self.config.model.sources.len() {
+            return Err(CharonError::Model(format!(
+                "model produced {} sources, config names {}",
+                separated.len(),
+                self.config.model.sources.len()
+            )));
         }
+        let stems = self
+            .config
+            .model
+            .sources
+            .iter()
+            .cloned()
+            .zip(separated)
+            .collect();
 
-        Ok(Stems::new(sources))
+        Ok(Stems::from_ordered(stems))
     }
 
     /// Separate audio from file
@@ -237,6 +310,14 @@ impl Separator {
         Ok(())
     }
 
+    /// Execution provider the model runs on ("CPU" or "CoreML")
+    pub fn provider(&self) -> &'static str {
+        match self.model {
+            #[cfg(feature = "ort-backend")]
+            Model::Onnx(ref m) => m.provider(),
+        }
+    }
+
     /// Get model configuration
     pub fn model_config(&self) -> &ModelConfig {
         &self.config.model
@@ -271,6 +352,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ort-backend")]
     fn test_config_builders() {
         let config = SeparatorConfig::onnx("model.onnx")
             .with_shifts(2)

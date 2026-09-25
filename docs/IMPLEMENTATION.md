@@ -1,229 +1,96 @@
-# Charon Implementation Summary
+# Implementation notes
 
-## Completed Features
+How a file becomes stems, and the contracts each stage keeps. Line
+references are to the 0.1.1 sources.
 
-### 1. Candle Backend Implementation
+## Pipeline
 
-**File**: `src/models.rs`
+1. **Decode** (`AudioFile::read`, `src/audio.rs`): Symphonia 0.6 with
+   explicit codec features. Samples are taken as decoded, without
+   clipping (Symphonia 0.5's MP3 decoder clamped to [-1, 1]; 0.6 does
+   not). Decode errors are logged with the failing stage.
+2. **Resample and downmix** (`Separator::separate`, `src/separator.rs`):
+   to the model's 44.1 kHz stereo. Resampling is rubato's windowed sinc
+   in 4096-frame chunks with a flushed tail; impulse tests check that
+   the output is time-aligned.
+3. **Normalize** (`Processor::process`, `src/processor.rs`): subtract
+   the mean and divide by the unbiased standard deviation of the mono
+   mix, as `demucs.api.Separator.separate_tensor` does; undo it on the
+   stems.
+4. **Segment** (`Processor::process_split`): 7.8 s windows (343980
+   samples, the model's static input), 25% overlap, stride 5.85 s. Each
+   window is centred on its chunk and filled with real neighbouring
+   audio where available, zeros elsewhere (`TensorChunk.padded` +
+   `center_trim`). Results are blended with the triangular weights of
+   `apply_model`, which never reach zero, so no division by zero at the
+   edges.
+5. **Shifts** (`Processor::process_shifted`, optional): zero-pad half a
+   second on both sides, run at evenly spaced offsets, average. Demucs
+   draws random offsets; Charon's are deterministic.
+6. **Model** (`OnnxModel::infer`, `src/models.rs`), one of two contracts:
+   - `Waveform`: `mix [1, 2, 343980]` in, `stems [1, 4, 2, 343980]` out.
+     The in-graph export.
+   - `DemucsSplit`: `mix` plus the complex-as-channels spectrogram
+     `spec [1, 4, 2048, 336]` in; `time [1, 4, 2, 343980]` and
+     `spec_out [1, 4, 4, 2048, 336]` out; Charon computes
+     `stems = time + ispec(spec_out)`. The spectrogram is
+     `HTDemucs._magnitude(_spec(mix))`: reflect-pad by `hop/2*3`, align
+     to a multiple of `hop`, `torch.stft` (periodic Hann 4096, hop 1024,
+     `normalized=True`, centre reflect padding), drop the Nyquist bin,
+     keep frames `[2, 2 + ceil(len/hop))`, layout L.re, L.im, R.re, R.im.
+     `_ispec` inverts it: zero Nyquist bin, two zero frames each side,
+     `torch.istft` with squared-window normalization, trim
+     `[pad, pad + len)`. `src/stft.rs` implements both with realfft
+     and is checked against `torch.stft` fixtures at 1e-5 relative.
+7. **Write** (`Stems::save_all_as`): WAV 16/24-bit int or 32-bit float,
+   FLAC 16/24-bit. flacenc writes the last partial block's size as the
+   STREAMINFO minimum block size, which readers take as a
+   variable-block stream; `write_flac` sets min = max.
 
-**Implementation Details**:
-- Added full Candle model support with safetensors loading
-- Automatic device selection (CUDA/Metal/CPU) with WASM32 support
-- Proper tensor conversion between ndarray and Candle formats
-- Multi-source audio separation output handling
-- VarMap integration for model weights management
+## Execution providers
 
-**Key Features**:
-- WebAssembly compatible (CPU-only on WASM)
-- Automatic GPU detection and fallback
-- Safetensors format support
-- Efficient tensor operations
+`OnnxOptions::execution_provider`: `Cpu`, `CoreMl` (feature `coreml`,
+macOS), `Auto` (CoreML if the session builds, else CPU with a warning).
 
-### 2. Real-time CPAL Integration
+CoreML runs the split export only, and runs it as one partition only
+when every convolution is 4-D with spatial axes of at most 16384: the
+`--target coreml` export runs the time branch's 1-D convolutions as 2-D
+ones with the time axis tiled into rows with kernel halos (exact). The
+compiled CoreML model is cached under `coreml-cache/<sha256 prefix>/`
+next to the model, because ONNX Runtime keys its cache by path and would
+load a stale compiled model after a re-export. macOS additionally
+compiles the cached program on load: about 7 s when its own cache is
+warm, about 27 s otherwise. `charon serve` keeps the session resident to
+pay that once.
 
-**File**: `src/realtime.rs`
+ONNX Runtime session options that matter, all measured:
+- In-graph export: `ConstantFolding` off and memory pattern off
+  (`OnnxOptions::low_memory()`), because folding materializes 3.8 GB of
+  STFT index constants.
+- Split export on CPU: graph optimization level `Extended` (level 3's
+  layout transforms cost 4% on Apple Silicon), memory pattern off
+  (2 GB of peak for 6% of time).
 
-**Implementation Details**:
-- `RealtimeSeparator` struct for live audio processing
-- CPAL stream management with proper error handling
-- Thread-safe buffer management using Arc<Mutex>
-- Configurable buffer sizes for latency control
-- Multi-source output buffers
+## Threads and memory
 
-**Key Features**:
-- Real-time audio input processing
-- Automatic device detection
-- Concurrent model inference
-- Per-source output retrieval
-- Low-latency audio pipeline
+Segments run one at a time; ONNX Runtime uses all cores inside a
+segment (`intra_threads`), and the STFT/iSTFT of the channels and
+sources run on rayon. Peak RSS is ONNX Runtime's activation memory on
+this graph (2-3 GB); the audio itself is about 1 MB per second of input
+across all stems.
 
-**API**:
-```rust
-let separator = RealtimeSeparator::new(model, processor, buffer_size);
-let stream = separator.start()?;
-let vocals = separator.get_output(2); // Get vocals output
-```
+## Resident server
 
-### 3. Pre-trained Model Zoo
+`charon serve` binds a Unix socket and answers one JSON object per line:
+`{"kind":"Separate","input":...,"output_dir":...,"format":...,"shifts":N}`,
+`{"kind":"Ping"}`, `{"kind":"Stop"}`. Replies carry `ok`, `stems`,
+`seconds` and `provider`. Jobs run sequentially in the server process;
+the client only waits.
 
-**File**: `src/model_zoo.rs`
+## What is deliberately not here
 
-**Implementation Details**:
-- `ModelZoo` struct for model management
-- `ModelMetadata` with comprehensive model information
-- Built-in model registry with popular models
-- Model download preparation (placeholder for HTTP client)
-- Automatic model path resolution
-
-**Built-in Models**:
-- **demucs-4stems**: Standard 4-stem separation (drums, bass, vocals, other)
-- **demucs-6stems**: Extended 6-stem separation (adds piano, guitar)
-- **vocals-only**: Optimized vocal extraction
-
-**Key Features**:
-- Model metadata management
-- Download status checking
-- Automatic configuration loading
-- Multiple format support (ONNX, safetensors)
-
-**API**:
-```rust
-let zoo = ModelZoo::new("models/")?;
-let models = zoo.list_models();
-let config = zoo.load_model("demucs-4stems")?;
-```
-
-### 4. WebAssembly Support
-
-**File**: `src/wasm.rs`
-
-**Implementation Details**:
-- `WasmSeparator` with wasm-bindgen bindings
-- JavaScript-friendly API
-- Automatic panic hook for better debugging
-- Serde serialization for JS interop
-- CPU-only execution for browser compatibility
-
-**Key Features**:
-- Browser-compatible audio separation
-- JavaScript bindings via wasm-bindgen
-- Efficient data transfer between JS and Rust
-- Error handling with JsValue
-- Console error panic hook
-
-**API (JavaScript)**:
-```javascript
-const separator = new WasmSeparator("model.onnx", 44100);
-const stems = separator.separate(audioData, 2);
-```
-
-## Library Updates
-
-### Updated `src/lib.rs`
-
-Added module exports:
-- `pub mod model_zoo`
-- `pub mod realtime`
-- `pub mod wasm` (conditional on wasm32)
-
-Added public re-exports:
-- `ModelZoo`, `ModelMetadata`
-- `RealtimeSeparator`
-- `WasmSeparator` (conditional)
-
-### Updated `Cargo.toml`
-
-Added dependencies:
-- `wasm-bindgen = "0.2"` (wasm32 target)
-- `serde-wasm-bindgen = "0.6"` (wasm32 target)
-- `console_error_panic_hook = "0.1"` (wasm32 target)
-- `web-sys` with AudioContext features (wasm32 target)
-
-## Testing Results
-
-All tests passing:
-```
-running 19 tests
-test models::tests::test_model_config_default ... ok
-test model_zoo::tests::test_model_zoo_creation ... ok
-test model_zoo::tests::test_model_metadata ... ok
-test performance::tests::test_performance_hints ... ok
-test audio::tests::test_duration_calculation ... ok
-test audio::tests::test_audio_buffer_creation ... ok
-test performance::tests::test_simd_ops ... ok
-test processor::tests::test_fade_window ... ok
-test audio::tests::test_mono_conversion ... ok
-test processor::tests::test_process_config_default ... ok
-test separator::tests::test_config_builders ... ok
-test separator::tests::test_separator_config_default ... ok
-test separator::tests::test_stems_creation ... ok
-test tests::test_version ... ok
-test utils::tests::test_chunk_size_calculation ... ok
-test utils::tests::test_memory_estimation ... ok
-test utils::tests::test_format_duration ... ok
-test performance::tests::test_audio_knn ... ok
-test performance::tests::test_batch_processor ... ok
-
-test result: ok. 19 passed; 0 failed; 0 ignored
-```
-
-## Known Limitations
-
-### Candle Backend
-- Dependency conflicts with candle-core 0.6.0 and rand versions
-- Recommended to use ONNX Runtime backend for production
-- Candle backend code is complete but requires candle-core updates
-
-### Model Zoo
-- HTTP download functionality is a placeholder
-- Requires manual model downloads or HTTP client integration
-- Model URLs are examples and need to be updated with real sources
-
-### WebAssembly
-- CPU-only execution (no GPU acceleration in browser)
-- Requires WASM-compatible model formats
-- Performance limited compared to native execution
-
-## Usage Examples
-
-### Real-time Processing
-```rust
-use charon::{Model, Processor, RealtimeSeparator};
-
-let model = Model::from_config(config)?;
-let processor = Processor::new(process_config);
-let separator = RealtimeSeparator::new(model, processor, 4096);
-
-let stream = separator.start()?;
-// Stream runs in background
-let vocals = separator.get_output(2);
-```
-
-### Model Zoo
-```rust
-use charon::ModelZoo;
-
-let zoo = ModelZoo::new("./models")?;
-for model in zoo.list_models() {
-    println!("{}: {}", model.name, model.description);
-}
-
-let config = zoo.load_model("vocals-only")?;
-let separator = Separator::new(SeparatorConfig { model: config, ..Default::default() })?;
-```
-
-### WebAssembly
-```rust
-// Rust side
-#[wasm_bindgen]
-pub fn process_audio(data: Vec<f32>) -> Result<JsValue, JsValue> {
-    let separator = WasmSeparator::new("model.onnx".to_string(), 44100)?;
-    separator.separate(data, 2)
-}
-```
-
-## Integration with high-cut-app
-
-The charon library is fully integrated with high-cut-app:
-- Path: `high-cut-app/src-tauri/Cargo.toml`
-- Dependency: `charon = { path = "../../charon", features = ["ort-backend"] }`
-- All features available for use in the Tauri application
-
-## Next Steps
-
-1. Update candle-core dependency when compatibility is fixed
-2. Implement HTTP client for model downloads
-3. Add more pre-trained models to the zoo
-4. Create WebAssembly examples and documentation
-5. Performance benchmarking for real-time processing
-6. Add streaming audio file processing
-
-## Conclusion
-
-All four requested features have been successfully implemented:
-- Candle backend (code complete, dependency issue noted)
-- Real-time CPAL integration (fully functional)
-- Pre-trained model zoo (functional, download placeholder)
-- WebAssembly support (fully functional)
-
-The library is production-ready with the ONNX Runtime backend and provides a solid foundation for audio source separation in Rust applications.
+Candle and WASM backends (removed: placeholders that did not build),
+GPU features that only forwarded build flags (removed), the
+`performance` module (deprecated, unused by the pipeline), CUDA
+(unmeasured, no hardware), other model families (each needs its own
+contract and parity record).

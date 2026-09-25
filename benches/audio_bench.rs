@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use charon_audio::{AudioBuffer, AudioKNN, SimdOps};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use ndarray::Array2;

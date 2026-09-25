@@ -1,4 +1,8 @@
-//! Pre-trained model zoo for easy model access
+//! Model metadata registry.
+//!
+//! Holds metadata (source URL, hash, stems) for known models and locates
+//! downloaded files. It does not download: `download_model` returns the
+//! URL to fetch manually.
 
 use crate::error::{CharonError, Result};
 use crate::models::ModelConfig;
@@ -17,6 +21,9 @@ pub struct ModelMetadata {
     pub channels: usize,
     pub file_size_mb: f64,
     pub download_url: Option<String>,
+    /// SHA-256 of the model file, when known
+    #[serde(default)]
+    pub sha256: Option<String>,
 }
 
 /// Pre-trained model zoo
@@ -37,65 +44,77 @@ impl ModelZoo {
         };
 
         zoo.register_builtin_models();
+        zoo.register_split_models();
         Ok(zoo)
     }
 
     /// Register built-in models
     fn register_builtin_models(&mut self) {
         self.registry.insert(
-            "demucs-4stems".to_string(),
+            "htdemucs".to_string(),
             ModelMetadata {
-                name: "demucs-4stems".to_string(),
-                version: "1.0.0".to_string(),
-                description: "Demucs 4-stem separation (drums, bass, vocals, other)".to_string(),
-                sources: vec![
-                    "drums".to_string(),
-                    "bass".to_string(),
-                    "vocals".to_string(),
-                    "other".to_string(),
-                ],
-                sample_rate: 44100,
-                channels: 2,
-                file_size_mb: 150.0,
-                download_url: Some("https://example.com/models/demucs-4stems.onnx".to_string()),
-            },
-        );
-
-        self.registry.insert(
-            "demucs-6stems".to_string(),
-            ModelMetadata {
-                name: "demucs-6stems".to_string(),
-                version: "1.0.0".to_string(),
-                description: "Demucs 6-stem separation (drums, bass, vocals, other, piano, guitar)"
+                name: "htdemucs".to_string(),
+                version: "StemSplitio/htdemucs-onnx".to_string(),
+                description: "HTDemucs 4-stem ONNX export (drums, bass, other, vocals). \
+                              Weights license not stated by the model authors."
                     .to_string(),
-                sources: vec![
-                    "drums".to_string(),
-                    "bass".to_string(),
-                    "vocals".to_string(),
-                    "other".to_string(),
-                    "piano".to_string(),
-                    "guitar".to_string(),
-                ],
+                sources: ["drums", "bass", "other", "vocals"]
+                    .map(String::from)
+                    .to_vec(),
                 sample_rate: 44100,
                 channels: 2,
-                file_size_mb: 200.0,
-                download_url: Some("https://example.com/models/demucs-6stems.onnx".to_string()),
+                file_size_mb: 301.8,
+                download_url: Some(
+                    "https://huggingface.co/StemSplitio/htdemucs-onnx/resolve/main/htdemucs.onnx"
+                        .to_string(),
+                ),
+                sha256: Some(
+                    "68d0bf16428ef66e692cdff8a9ccf28f1ef3f69440d57e58605a4cc55fcc5e74".to_string(),
+                ),
             },
         );
+    }
 
-        self.registry.insert(
-            "vocals-only".to_string(),
-            ModelMetadata {
-                name: "vocals-only".to_string(),
-                version: "1.0.0".to_string(),
-                description: "Optimized vocal extraction model".to_string(),
-                sources: vec!["vocals".to_string(), "instrumental".to_string()],
-                sample_rate: 44100,
-                channels: 2,
-                file_size_mb: 80.0,
-                download_url: Some("https://example.com/models/vocals-only.onnx".to_string()),
-            },
-        );
+    fn register_split_models(&mut self) {
+        // Both are produced by tools/export/export_htdemucs.py; neither is
+        // hosted yet. Hashes and measurements: docs/MEASUREMENTS.md.
+        for (name, target, sha, mb) in [
+            (
+                "htdemucs-split",
+                "cpu",
+                "6104c3de08607e0898f70835f1be1ff13a85bbea4826bdba80f9cb7b58fe088f",
+                176.6,
+            ),
+            (
+                "htdemucs-split-coreml",
+                "coreml",
+                "782026bd0dbc67e97146271d813f0dc61f5242f80eeefbd6abee5dfe1839607d",
+                164.5,
+            ),
+        ] {
+            self.registry.insert(
+                name.to_string(),
+                ModelMetadata {
+                    name: name.to_string(),
+                    version: format!(
+                        "tools/export/export_htdemucs.py --target {target}, demucs 4.1.0"
+                    ),
+                    description: format!(
+                        "HTDemucs 4-stem export with STFT/iSTFT outside the graph, \
+                         for the {target} execution provider. Not hosted: produce it \
+                         with the export script."
+                    ),
+                    sources: ["drums", "bass", "other", "vocals"]
+                        .map(String::from)
+                        .to_vec(),
+                    sample_rate: 44100,
+                    channels: 2,
+                    file_size_mb: mb,
+                    download_url: None,
+                    sha256: Some(sha.to_string()),
+                },
+            );
+        }
     }
 
     /// List available models
@@ -128,7 +147,8 @@ impl ModelZoo {
         None
     }
 
-    /// Download model (placeholder - requires actual HTTP client)
+    /// Downloading is not implemented; returns the path if the file is
+    /// already present, otherwise an error naming the download URL.
     pub fn download_model(&self, name: &str) -> Result<PathBuf> {
         let metadata = self
             .get_metadata(name)
@@ -160,15 +180,15 @@ impl ModelZoo {
             .get_model_path(name)
             .ok_or_else(|| CharonError::NotSupported(format!("Model {name} not downloaded")))?;
 
-        Ok(ModelConfig {
-            model_path,
-            #[cfg(any(feature = "ort-backend", feature = "candle-backend"))]
-            backend: None,
-            sample_rate: metadata.sample_rate,
-            channels: metadata.channels,
-            sources: metadata.sources.clone(),
-            chunk_size: Some(441000),
-        })
+        let mut config = if name.starts_with("htdemucs-split") {
+            ModelConfig::htdemucs_split(&model_path)
+        } else {
+            ModelConfig::htdemucs(&model_path)
+        };
+        config.sample_rate = metadata.sample_rate;
+        config.channels = metadata.channels;
+        config.sources = metadata.sources.clone();
+        Ok(config)
     }
 }
 
@@ -187,8 +207,8 @@ mod tests {
     fn test_model_metadata() {
         let temp_dir = std::env::temp_dir().join("charon_test_zoo");
         let zoo = ModelZoo::new(&temp_dir).unwrap();
-        let metadata = zoo.get_metadata("demucs-4stems");
-        assert!(metadata.is_some());
-        assert_eq!(metadata.unwrap().sources.len(), 4);
+        let metadata = zoo.get_metadata("htdemucs").unwrap();
+        assert_eq!(metadata.sources.len(), 4);
+        assert!(metadata.sha256.is_some());
     }
 }

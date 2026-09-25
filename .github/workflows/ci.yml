@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # Weekly run of the ignored real-model test (downloads the 316 MB model).
+    - cron: "0 6 * * 1"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  # `--all-features` includes `coreml` and `ep-experimental`, whose ONNX
+  # Runtime builds exist for macOS only; Linux runs `--features realtime`.
+  clippy:
+    name: Clippy (${{ matrix.os }}, ${{ matrix.features }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, features: "" }
+          - { os: ubuntu-latest, features: "--no-default-features" }
+          - { os: ubuntu-latest, features: "--features realtime" }
+          - { os: macos-latest, features: "--all-features" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: ALSA headers (cpal, `realtime` feature)
+        if: matrix.os == 'ubuntu-latest' && matrix.features == '--features realtime'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets ${{ matrix.features }} -- -D warnings
+
+  test:
+    name: Test (${{ matrix.os }}, ${{ matrix.features }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, features: "" }
+          - { os: ubuntu-latest, features: "--no-default-features" }
+          - { os: ubuntu-latest, features: "--features realtime" }
+          - { os: macos-latest, features: "" }
+          - { os: macos-latest, features: "--no-default-features" }
+          - { os: macos-latest, features: "--all-features" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: ALSA headers (cpal, `realtime` feature)
+        if: matrix.os == 'ubuntu-latest' && matrix.features == '--features realtime'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test ${{ matrix.features }}
+
+  msrv:
+    name: MSRV (1.89)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-targets --locked
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --no-deps
+
+  real-model:
+    name: HTDemucs regression (weekly)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache model
+        id: model
+        uses: actions/cache@v4
+        with:
+          path: models/htdemucs.onnx
+          key: htdemucs-onnx-68d0bf16428ef66e692cdff8a9ccf28f1ef3f69440d57e58605a4cc55fcc5e74
+      - name: Download model
+        if: steps.model.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p models
+          curl -sSL -o models/htdemucs.onnx \
+            https://huggingface.co/StemSplitio/htdemucs-onnx/resolve/main/htdemucs.onnx
+          echo "68d0bf16428ef66e692cdff8a9ccf28f1ef3f69440d57e58605a4cc55fcc5e74  models/htdemucs.onnx" | shasum -a 256 -c
+      - run: CHARON_HTDEMUCS_MODEL=$PWD/models/htdemucs.onnx cargo test --release --test htdemucs -- --ignored --nocapture
