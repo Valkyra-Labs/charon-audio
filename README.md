@@ -1,8 +1,14 @@
-# charon-audio
+# Charon Audio
 
-Rust music source separation pipeline for ONNX models.
+[![Crates.io](https://img.shields.io/crates/v/charon-audio.svg)](https://crates.io/crates/charon-audio)
+[![Documentation](https://docs.rs/charon-audio/badge.svg)](https://docs.rs/charon-audio)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Build Status](https://github.com/Valkyra-Labs/charon-audio/workflows/CI/badge.svg)](https://github.com/Valkyra-Labs/charon-audio/actions)
+[![Downloads](https://img.shields.io/crates/d/charon-audio.svg)](https://crates.io/crates/charon-audio)
 
-charon runs the [HTDemucs](https://github.com/facebookresearch/demucs)
+**Rust music source separation pipeline for ONNX models.**
+
+Charon runs the [HTDemucs](https://github.com/facebookresearch/demucs)
 4-stem model (drums, bass, other, vocals) through ONNX Runtime, with
 decoding, STFT/iSTFT, segmentation, overlap-add and output writing done
 in Rust. No Python at run time. On macOS the network runs on the GPU
