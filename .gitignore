@@ -37,6 +37,7 @@ __pycache__/
 # Local measurement records and audits, kept out of the repository
 /docs/audit/
 /docs/parity/
+/docs/inside/
 
 # Model files live next to the manifest only locally
 /models/*.onnx
