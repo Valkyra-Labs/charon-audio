@@ -15,15 +15,15 @@ every number in this file has a measurement record under
 | Area | State |
 |---|---|
 | HTDemucs 4-stem separation, CPU | **Works.** Parity with PyTorch Demucs: max sample difference 1.2e-4 on synthetic input, equal median SDR on MUSDB18 test previews. See [Q1](docs/parity/2026-09-24-htdemucs-q1.md), [MUSDB7](docs/parity/2026-09-24-htdemucs-musdb7.md), [real tracks](docs/parity/2026-09-24-htdemucs-real-tracks.md). |
-| HTDemucs on the GPU (macOS, CoreML) | **Works** with the split-transform export (`coreml` feature). Output within 1.3e-5 of PyTorch on a full track. Separation 2.5x faster than the CPU path; loading the compiled model costs 7 s per process. [Record](docs/parity/2026-09-25-gpu-and-speed.md). |
+| HTDemucs on the GPU (macOS, CoreML) | **Works** with the CoreML-target export (`coreml` feature): one CoreML partition, all nodes on the GPU. Output within 2e-6 of PyTorch. Separation 3x faster than the CPU path (5.6 s for a 193 s track); loading the compiled model costs 7 s per process. [Record](docs/parity/2026-09-25-gpu-and-speed.md). |
 | Input: WAV, FLAC, MP3, OGG/Vorbis, AAC/M4A, ALAC, AIFF, CAF, MKV (Symphonia 0.6) | Works. Decoded samples are not clipped. Only WAV, FLAC and MP3 are exercised by tests or records. |
 | Output: WAV 16/24-bit int, 32-bit float; FLAC 16/24-bit | Works, round-trip tested. |
 | Resampling to the model rate (rubato) | Works, time-aligned (impulse tests). |
-| Memory | Split export: 3.4 GB peak on CPU, 3.8 GB on CoreML (ONNX Runtime activation memory). In-graph export: 2.1 GB with its low-memory preset. [Memory record](docs/parity/2026-09-24-memory.md), [GPU record](docs/parity/2026-09-25-gpu-and-speed.md). |
-| Speed, 193 s track on an Apple M4 Pro | Split export: 17.1 s CPU, 16.2 s CoreML end to end (8.2 s of it is separation on CoreML). In-graph export: 26.4 s. PyTorch: 35.5 s CPU, 9.0 s MPS. [Head-to-head](docs/parity/2026-09-24-head-to-head.md), [GPU record](docs/parity/2026-09-25-gpu-and-speed.md). |
+| Memory | Split export: 3.4 GB peak on CPU, 2.6 GB on CoreML (ONNX Runtime activation memory). In-graph export: 2.1 GB with its low-memory preset. [Memory record](docs/parity/2026-09-24-memory.md), [GPU record](docs/parity/2026-09-25-gpu-and-speed.md). |
+| Speed, 193 s track on an Apple M4 Pro | Split export: 17.1 s CPU, 13.4 s CoreML end to end (of which 7 s is the CoreML model load and 5.6 s the separation). In-graph export: 26.4 s. PyTorch: 35.5 s CPU, 9.0 s MPS. [Head-to-head](docs/parity/2026-09-24-head-to-head.md), [GPU record](docs/parity/2026-09-25-gpu-and-speed.md). |
 | Other models (MDX-Net, RoFormer, Open-Unmix, htdemucs_ft/6s) | **Not supported.** Each needs its own tensor contract and parity check. |
 | CUDA, WebGPU | **Not supported.** CUDA is unmeasured (no hardware). WebGPU runs the in-graph export but slower than CPU. |
-| Split export hosting | The split model is not hosted yet. Produce it with `tools/export/export_htdemucs.py` (PyTorch + demucs 4.1.0; SHA-256 printed and recorded). |
+| Split export hosting | The split models are not hosted yet. Produce them with `tools/export/export_htdemucs.py` (PyTorch + demucs 4.1.0). The CPU export is byte-for-byte reproducible; the CoreML export reproduces the same weights, names and operators but not the same bytes (dynamo exporter serialization). Hashes of the measured artifacts are recorded. |
 | Real-time (CPAL) | Experimental, behind the `realtime` feature, not real-time safe, no tests. |
 | Model download / zoo | Not implemented. `ModelZoo` holds metadata only; download the model yourself (below). |
 | CLI binary, C ABI, Python bindings | Not in this release. |
@@ -33,10 +33,11 @@ version whose inference was a placeholder. Do not use it.
 
 ## Quick start
 
-Two model files exist. The in-graph export runs on the CPU only and can
-be downloaded. The split-transform export (STFT/iSTFT in charon) runs
-on CoreML and on the CPU, is faster on both, and currently has to be
-exported by you.
+Three model files exist. The in-graph export runs on the CPU only and
+can be downloaded. The split-transform exports (STFT/iSTFT in charon)
+are faster and currently have to be exported by you: one graph for the
+CPU provider and one for CoreML (the CoreML provider needs the time
+branch's convolutions tiled; that tiling costs 10% on the CPU).
 
 ### A. Download the in-graph export (CPU)
 
@@ -61,24 +62,33 @@ stereo). Options: `--format wav16|wav24|wav32|flac16|flac24`,
 `--shifts N` (time-shift ensemble), `--max-speed` (ONNX Runtime defaults:
 faster, 2.6x the memory).
 
-### B. Export the split model and run it on CoreML
+### B. Export the split models and run them on the CPU or CoreML
 
 ```bash
 python -m venv .venv && .venv/bin/pip install "demucs==4.1.0" torch onnx onnxruntime
 ```
 
 ```bash
-.venv/bin/python tools/export/export_htdemucs.py htdemucs_split.onnx
+.venv/bin/python tools/export/export_htdemucs.py htdemucs_split.onnx --target cpu
 ```
 
-The script checks the export against PyTorch before writing and prints
-the SHA-256 (the recorded one is
-`6104c3de08607e0898f70835f1be1ff13a85bbea4826bdba80f9cb7b58fe088f` for
-demucs 4.1.0 + torch 2.14.0; other torch versions may differ in the
-last bits). Then:
+```bash
+.venv/bin/python tools/export/export_htdemucs.py htdemucs_split_coreml.onnx --target coreml
+```
+
+The script checks each export against PyTorch before writing and prints
+the SHA-256. With demucs 4.1.0 and torch 2.14.0 the CPU export hashes
+to `6104c3de...8fe088f` every time; the CoreML export is structurally
+identical between runs but its bytes differ (the measured artifact was
+`782026bd...839607d`), see the
+[GPU record](docs/parity/2026-09-25-gpu-and-speed.md). Then:
 
 ```bash
-cargo run --release --features coreml --example separate -- song.mp3 stems/ htdemucs_split.onnx --split
+cargo run --release --example separate -- song.mp3 stems/ htdemucs_split.onnx --split
+```
+
+```bash
+cargo run --release --features coreml --example separate -- song.mp3 stems/ htdemucs_split_coreml.onnx --split
 ```
 
 `--ep cpu|coreml|auto` picks the provider (default `auto`: CoreML if it
@@ -136,9 +146,9 @@ model hash, versions, host and method. Summary, Apple M4 Pro, CPU:
 - MUSDB18 7-second test previews, whole-signal SDR (not museval; not
   comparable with published tables): drums 9.50, bass 9.04, other 5.19,
   vocals 8.88 dB. Mixture-as-estimate baseline: -4.1 to -6.9 dB.
-- Split export, 193 s track: separation 16.6-17.7 s on CPU (memory
-  pattern on/off), 8.2 s on CoreML; end to end 17.1 s CPU, 16.2 s
-  CoreML; peak RSS 3.4 GB CPU, 3.8 GB CoreML.
+- Split exports, 193 s track: separation 16.6 s on CPU, 5.6 s on CoreML
+  (one partition, RTF 34); end to end 17.1 s CPU, 13.4 s CoreML; peak
+  RSS 3.4 GB CPU, 2.6 GB CoreML.
 - In-graph export, 193 s track: 2.12 GB peak (low-memory preset),
   5.58 GB (`max_speed`); 26.4 s end to end.
 - Head-to-head on the same track and machine, see the

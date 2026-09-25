@@ -17,13 +17,17 @@
   fixtures; `ModelContract::DemucsSplit`,
   `SeparatorConfig::htdemucs_split`.
 - `coreml` feature: Apple CoreML execution provider for the split export
-  (MLProgram, static shapes, compiled model cached next to the model
-  file). `ExecutionProvider::Auto` (default) uses CoreML when the
-  feature is on and the session builds, else CPU. Measured on a 193 s
-  track (M4 Pro): separation 8.4 s on CoreML vs 16.6 s on CPU with the
-  split export and 20.4 s with the in-graph export
+  (MLProgram, static shapes, compiled model cached in a directory keyed
+  by the model file's SHA-256, since ONNX Runtime keys its cache by path
+  and loads a stale compiled model otherwise). `ExecutionProvider::Auto`
+  (default) uses CoreML when the feature is on and the session builds,
+  else CPU. The CoreML-target export (`--target coreml`) tiles the time
+  branch's convolutions so the whole graph runs as one CoreML partition.
+  Measured on a 193 s track (M4 Pro): separation 5.6 s on CoreML vs
+  16.6 s on CPU with the split exports and 22.8 s with the in-graph
+  export; end to end 13.4 s vs 17.1 s vs 26.4 s
   (`docs/parity/2026-09-25-gpu-and-speed.md`). CoreML output agrees
-  with PyTorch to 1.3e-5.
+  with PyTorch to 2e-6.
 - Real ONNX inference. `OnnxModel::infer` runs the session and maps the
   `[1, sources, channels, samples]` output onto the stems. Tensor names
   and a fixed segment length are set per model (`ModelConfig::input_name`,
@@ -79,6 +83,8 @@
   silently skipped, and carry the failing stage.
 - Resampling processes in 4096-frame chunks with a flushed tail, and is
   verified time-aligned with impulse tests at four rate pairs.
+- The split CPU preset uses graph optimization level `Extended`: level
+  3's layout transforms cost 4% on this graph on Apple Silicon.
 - Declared `rust-version = "1.89"`, measured with the committed lockfile.
   Rust 1.86 fails. 1.87 and 1.88 were not tested.
 
@@ -107,11 +113,14 @@
   STFT export fails on the ORT 1.28 CoreML provider in every
   configuration tried (`docs/parity/2026-09-24-memory.md`). CUDA has not
   been measured (no hardware). WebGPU runs but is slower than CPU.
-- The split export is not hosted yet; produce it with
-  `tools/export/export_htdemucs.py` (needs PyTorch and demucs 4.1.0).
+- The split exports are not hosted yet; produce them with
+  `tools/export/export_htdemucs.py --target cpu|coreml` (needs PyTorch
+  and demucs 4.1.0; the CPU export is byte-for-byte reproducible, the
+  CoreML export structurally; hashes of the measured artifacts recorded).
 - Peak RSS: in-graph export with the low-memory preset about 2.1 GB;
-  split export on CPU about 3.3 GB, on CoreML about 3.7 GB (ONNX
+  split export on CPU about 3.4 GB, on CoreML about 2.6 GB (ONNX
   Runtime activation memory; see the GPU record). Loading a cached
-  CoreML model takes about 7 s.
+  CoreML model takes about 7 s per process; no ONNX Runtime option
+  changes that.
 - Segments run one at a time; ONNX Runtime uses all cores within a
   segment.
