@@ -163,11 +163,15 @@ config.model.onnx = OnnxOptions::max_speed();
 
 ## Model license
 
-The HTDemucs code is MIT. The weights carry no license statement from
-their authors; the ONNX export on Hugging Face is re-hosted by a third
-party under MIT on their own interpretation. Charon does not vendor or
-redistribute the weights. Check the terms for your use before shipping
-them.
+The HTDemucs code is MIT. The pretrained weights are not: the Demucs
+maintainer stated in
+[facebookresearch/demucs#327](https://github.com/facebookresearch/demucs/issues/327)
+that "the model weights are not covered by the MIT license, and are
+provided only for scientific purposes", and no later statement changes
+that. Third-party ONNX re-hosts that label the weights MIT do so on their
+own interpretation. Charon does not vendor or redistribute the weights;
+whether your use of the model's output is permitted is for you to
+assess, and commercial use is not known to be authorised.
 
 ## Measurements
 

@@ -28,18 +28,23 @@ before it writes anything.
 
 ## License of the weights
 
-The Demucs code is MIT. Its pretrained weights carry no license
-statement from the authors (the Hugging Face card of the in-graph export
-says MIT on the re-hoster's interpretation). Hosting the split exports
-redistributes derived weights; decide whether that is acceptable for
-the hosting account before uploading, and say in the model card that
-the weights come from `facebookresearch/demucs` (Rouard, Massa,
-Défossez, ICASSP 2023) and were converted, not trained.
+The Demucs code is MIT. Its pretrained weights are not covered by that
+license: the maintainer wrote in
+[facebookresearch/demucs#327](https://github.com/facebookresearch/demucs/issues/327)
+that "the model weights are not covered by the MIT license, and are
+provided only for scientific purposes". The official weights repository
+(`adefossez/HTDemucs` on Hugging Face) carries no license field, and the
+model was trained on MUSDB18-HQ, whose license is non-commercial. Third
+party re-hosts that label the weights MIT do so on their own
+interpretation. This is why Charon does not host converted weights:
+you obtain the checkpoint from its official source and convert it
+yourself with the export script, and you assess whether your use is
+permitted.
 
 ## Hosting
 
-The split exports are not hosted yet; produce them with the export
-script as shown in the README. Once they are published, the `url`
-fields in `models/manifest.json` and the `download_url` entries in
-`ModelZoo` will point at them, and the weekly CI job will verify the
-hosted files against the hashes above.
+The split exports are not hosted, for the license reason above; produce
+them with the export script as shown in the README. Should the rights
+holder authorise redistribution, the `url` fields in
+`models/manifest.json` and the `download_url` entries in `ModelZoo` will
+point at hosted files verified against the hashes above.
