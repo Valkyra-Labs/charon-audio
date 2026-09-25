@@ -5,9 +5,15 @@
 //! at all, and how fast, before any pipeline work.
 //!
 //! Usage: ep_probe <model> <ep: cpu|coreml|webgpu> [runs=N] [threads=N]
-//!        [profile=<file prefix>] [nofold=1] [mempattern=0]
+//!        [profile=<file prefix>] [nofold=1] [mempattern=0] [spec=fast]
+//!        [units=all|gpu|ane] [format=mlprogram|nn] [rss=1] [log=verbose]
 //!
 //! `coreml` and `webgpu` need the `ep-experimental` feature.
+
+#![cfg_attr(
+    not(feature = "ep-experimental"),
+    allow(unused_variables, unused_assignments, unused_mut)
+)]
 
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::{Tensor, ValueType};
@@ -27,6 +33,11 @@ fn main() -> anyhow::Result<()> {
     let mut profile = None;
     let mut nofold = false;
     let mut mempattern = true;
+    let mut spec_fast = false;
+    let mut units = "gpu".to_string();
+    let mut format_nn = false;
+    let mut rss = false;
+    let mut verbose = false;
     for kv in &args[3..] {
         let (k, v) = kv.split_once('=').expect("key=value");
         match k {
@@ -35,6 +46,11 @@ fn main() -> anyhow::Result<()> {
             "profile" => profile = Some(v.to_string()),
             "nofold" => nofold = v == "1",
             "mempattern" => mempattern = v == "1",
+            "spec" => spec_fast = v == "fast",
+            "units" => units = v.to_string(),
+            "format" => format_nn = v == "nn",
+            "rss" => rss = v == "1",
+            "log" => verbose = v == "verbose",
             other => anyhow::bail!("unknown key {other}"),
         }
     }
@@ -52,6 +68,11 @@ fn main() -> anyhow::Result<()> {
                 .with_disabled_optimizers("ConstantFolding")
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
+        if verbose {
+            b = b
+                .with_log_level(ort::logging::LogLevel::Verbose)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
         if let Some(prefix) = &profile {
             b = b
                 .with_profiling(format!("{prefix}_{ep}"))
@@ -64,15 +85,25 @@ fn main() -> anyhow::Result<()> {
             "coreml" => {
                 let cache = std::env::temp_dir().join("charon-coreml-cache");
                 std::fs::create_dir_all(&cache)?;
-                b.with_execution_providers([
-                    ort::ep::CoreML::default()
-                        .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
-                        .with_static_input_shapes(true)
-                        .with_compute_units(ort::ep::coreml::ComputeUnits::All)
-                        .with_model_cache_dir(cache.display())
-                        .build(),
-                    cpu,
-                ])
+                let mut ep = ort::ep::CoreML::default()
+                    .with_model_format(if format_nn {
+                        ort::ep::coreml::ModelFormat::NeuralNetwork
+                    } else {
+                        ort::ep::coreml::ModelFormat::MLProgram
+                    })
+                    .with_static_input_shapes(true)
+                    .with_compute_units(match units.as_str() {
+                        "all" => ort::ep::coreml::ComputeUnits::All,
+                        "ane" => ort::ep::coreml::ComputeUnits::CPUAndNeuralEngine,
+                        _ => ort::ep::coreml::ComputeUnits::CPUAndGPU,
+                    })
+                    .with_model_cache_dir(cache.display());
+                if spec_fast {
+                    ep = ep.with_specialization_strategy(
+                        ort::ep::coreml::SpecializationStrategy::FastPrediction,
+                    );
+                }
+                b.with_execution_providers([ep.build(), cpu])
             }
             #[cfg(feature = "ep-experimental")]
             "webgpu" => b.with_execution_providers([ort::ep::WebGPU::default().build(), cpu]),
@@ -144,6 +175,14 @@ fn main() -> anyhow::Result<()> {
     if profile.is_some() {
         let path = session.end_profiling()?;
         println!("profile written: {path}");
+    }
+    if rss {
+        let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+        unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+        println!(
+            "peak RSS {:.0} MB",
+            usage.ru_maxrss as f64 / (1024.0 * 1024.0)
+        );
     }
     if ep != "cpu" {
         let mut cpu = build("cpu")?;

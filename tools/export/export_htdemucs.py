@@ -17,7 +17,18 @@ primitives) follow demucs-onnx 0.3.4 (MIT). A parity check against the
 unpatched PyTorch model runs before writing.
 
 Environment: demucs==4.1.0, torch (version printed), onnx, onnxruntime.
-Usage: python export_htdemucs.py out/htdemucs_split.onnx [--no-check]
+Usage: python export_htdemucs.py <out.onnx> [--target cpu|coreml] [--no-check] [--batch N]
+
+`--target cpu` (default): legacy TorchScript exporter, opset 17, 1-D
+convolutions kept. Fastest measured graph on ONNX Runtime's CPU provider.
+`--target coreml`: torch.export-based exporter, opset 18, every 1-D
+convolution run as a 2-D one with the time axis tiled into rows of at
+most 16384 samples, which is what ONNX Runtime's CoreML provider accepts
+(one partition, all nodes on the GPU). Numerically identical to the
+1-D operators; 10% slower than the CPU-target graph on the CPU provider.
+`--batch N` bakes a batch of N segments into the graph; the default is 1
+and batching measured slower on both providers.
+Measurements: docs/parity/2026-09-25-gpu-and-speed.md.
 """
 import math, sys, types, hashlib
 from pathlib import Path
@@ -102,6 +113,74 @@ def onnx_friendly_mha_forward(self_, query, key, value, key_padding_mask=None,
     return out, (attn.mean(dim=1) if average_attn_weights else attn)
 
 
+COREML_CONV_LIMIT = 16384  # ONNX Runtime's CoreML provider rejects longer spatial axes
+TARGET = sys.argv[sys.argv.index("--target") + 1] if "--target" in sys.argv else "cpu"
+assert TARGET in ("cpu", "coreml"), TARGET
+DYNAMO = TARGET == "coreml"
+TILING = TARGET == "coreml"
+
+
+def _tiled_conv(x, weight, bias, stride, pad, dilation, groups):
+    """1-D convolution (zero padding `pad` both sides) computed as a 2-D
+    convolution over tiles of the time axis. Each tile row carries the halo
+    it needs, so the result equals F.conv1d exactly."""
+    k = weight.shape[-1]
+    ke = dilation * (k - 1) + 1
+    L = x.shape[-1]
+    Lp = L + 2 * pad
+    Lo = (Lp - ke) // stride + 1
+    if Lp <= COREML_CONV_LIMIT or not TILING:
+        y = F.conv2d(x.unsqueeze(2), weight.unsqueeze(2), bias, stride=(1, stride),
+                     padding=(0, pad), dilation=(1, dilation), groups=groups)
+        return y.squeeze(2)
+    to = (COREML_CONV_LIMIT - ke) // stride + 1          # outputs per tile row
+    ti = (to - 1) * stride + ke                          # inputs per tile row
+    rows = -(-Lo // to)
+    need = (rows - 1) * to * stride + ti
+    xp = F.pad(x, (pad, need - L - pad))
+    tiles = torch.stack([xp[..., r * to * stride: r * to * stride + ti] for r in range(rows)], dim=2)
+    y = F.conv2d(tiles, weight.unsqueeze(2), bias, stride=(1, stride),
+                 dilation=(1, dilation), groups=groups)   # [B, Co, rows, to]
+    B, Co = y.shape[:2]
+    return y.reshape(B, Co, rows * to)[..., :Lo]
+
+
+def _zero_stuff(x, stride):
+    """Insert stride-1 zeros between samples: [B, C, L] -> [B, C, (L-1)*stride+1]."""
+    B, C, L = x.shape
+    z = torch.zeros(B, C, L, stride - 1, dtype=x.dtype)
+    return torch.cat([x.unsqueeze(-1), z], dim=-1).reshape(B, C, L * stride)[..., :(L - 1) * stride + 1]
+
+
+def convs_as_2d(model):
+    """Run every Conv1d / ConvTranspose1d (the time branch) as a 2-D
+    convolution with the time axis tiled into rows when it exceeds the
+    CoreML limit. Numerically identical to the 1-D operators."""
+    def conv1d(self_, x):
+        return _tiled_conv(x, self_.weight, self_.bias, self_.stride[0], self_.padding[0],
+                           self_.dilation[0], self_.groups)
+
+    def convtr1d(self_, x, output_size=None):
+        # conv_transpose1d(x) == conv1d(zero_stuffed(x), flipped/transposed
+        # kernel, stride 1, padding k - 1 - p), plus output_padding zeros.
+        assert self_.groups == 1 and self_.dilation[0] == 1
+        k, s, p, op = self_.kernel_size[0], self_.stride[0], self_.padding[0], self_.output_padding[0]
+        w = self_.weight.flip(-1).transpose(0, 1)         # [Cout, Cin, k]
+        y = _tiled_conv(_zero_stuff(x, s), w, self_.bias, 1, k - 1 - p, 1, 1)
+        return F.pad(y, (0, op)) if op else y
+
+    n = 0
+    for m in model.modules():
+        if type(m) is nn.Conv1d:
+            assert m.padding_mode == "zeros"
+            m.forward = types.MethodType(conv1d, m)
+            n += 1
+        elif type(m) is nn.ConvTranspose1d:
+            m.forward = types.MethodType(convtr1d, m)
+            n += 1
+    return n
+
+
 def spec_cac(mix: torch.Tensor, model) -> torch.Tensor:
     """HTDemucs._magnitude(HTDemucs._spec(mix)) as a real (B, C*2, F, T) tensor."""
     z = model._spec(mix)
@@ -147,8 +226,9 @@ class SplitHTDemucs(nn.Module):
 def main():
     out = Path(sys.argv[1])
     check = "--no-check" not in sys.argv
+    batch = int(sys.argv[sys.argv.index("--batch") + 1]) if "--batch" in sys.argv else 1
     import demucs
-    print(f"demucs {demucs.__version__}, torch {torch.__version__}")
+    print(f"demucs {demucs.__version__}, torch {torch.__version__}, target {TARGET}")
     bag = get_model("htdemucs")
     model = bag.models[0]
     model.eval()
@@ -156,7 +236,7 @@ def main():
     assert model.cac and model.nfft == N_FFT and model.hop_length == HOP
 
     torch.manual_seed(0)
-    mix = torch.randn(1, 2, N_SAMPLES) * 0.1
+    mix = torch.randn(batch, 2, N_SAMPLES) * 0.1
     with torch.no_grad():
         reference = model(mix)  # unpatched PyTorch, full pipeline
         spec_in = spec_cac(mix, model)
@@ -164,6 +244,8 @@ def main():
 
     coerce_segment_to_float(model)
     disable_random_pos_shift(model)
+    if TARGET == "coreml":
+        print("1-D convolutions run as 2-D:", convs_as_2d(model))
     for mod in model.modules():
         if isinstance(mod, nn.MultiheadAttention):
             mod.forward = types.MethodType(onnx_friendly_mha_forward, mod)
@@ -184,11 +266,19 @@ def main():
     with torch.no_grad():
         torch.onnx.export(
             split, (mix, spec_in), str(out),
-            opset_version=17,
+            # The dynamo exporter emits opset 18 and cannot downgrade this graph.
+            opset_version=18 if DYNAMO else 17,
             input_names=["mix", "spec"], output_names=["time", "spec_out"],
-            do_constant_folding=True, export_params=True, dynamo=False,
+            do_constant_folding=True, export_params=True,
+            dynamo=DYNAMO,
         )
     import onnx, onnxruntime as ort
+    # The dynamo exporter writes large initializers to `<out>.data`; fold
+    # them back into a single self-contained file.
+    data = out.with_name(out.name + ".data")
+    if data.exists():
+        onnx.save(onnx.load(str(out)), str(out))
+        data.unlink()
     onnx.checker.check_model(onnx.load(str(out)))
     sess = ort.InferenceSession(str(out), providers=["CPUExecutionProvider"])
     print("onnx inputs", [(i.name, i.shape) for i in sess.get_inputs()])

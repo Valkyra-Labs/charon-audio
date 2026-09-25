@@ -44,7 +44,7 @@ impl ModelZoo {
         };
 
         zoo.register_builtin_models();
-        zoo.register_split_model();
+        zoo.register_split_models();
         Ok(zoo)
     }
 
@@ -75,27 +75,46 @@ impl ModelZoo {
         );
     }
 
-    fn register_split_model(&mut self) {
-        self.registry.insert(
-            "htdemucs-split".to_string(),
-            ModelMetadata {
-                name: "htdemucs-split".to_string(),
-                version: "tools/export/export_htdemucs.py, demucs 4.1.0".to_string(),
-                description: "HTDemucs 4-stem export with STFT/iSTFT outside the graph \
-                              (runs on CoreML). Not hosted: produce it with the export script."
-                    .to_string(),
-                sources: ["drums", "bass", "other", "vocals"]
-                    .map(String::from)
-                    .to_vec(),
-                sample_rate: 44100,
-                channels: 2,
-                file_size_mb: 176.6,
-                download_url: None,
-                sha256: Some(
-                    "6104c3de08607e0898f70835f1be1ff13a85bbea4826bdba80f9cb7b58fe088f".to_string(),
-                ),
-            },
-        );
+    fn register_split_models(&mut self) {
+        // Both are produced by tools/export/export_htdemucs.py; neither is
+        // hosted yet. Hashes and measurements: docs/parity/2026-09-25-gpu-and-speed.md.
+        for (name, target, sha, mb) in [
+            (
+                "htdemucs-split",
+                "cpu",
+                "6104c3de08607e0898f70835f1be1ff13a85bbea4826bdba80f9cb7b58fe088f",
+                176.6,
+            ),
+            (
+                "htdemucs-split-coreml",
+                "coreml",
+                "782026bd0dbc67e97146271d813f0dc61f5242f80eeefbd6abee5dfe1839607d",
+                164.5,
+            ),
+        ] {
+            self.registry.insert(
+                name.to_string(),
+                ModelMetadata {
+                    name: name.to_string(),
+                    version: format!(
+                        "tools/export/export_htdemucs.py --target {target}, demucs 4.1.0"
+                    ),
+                    description: format!(
+                        "HTDemucs 4-stem export with STFT/iSTFT outside the graph, \
+                         for the {target} execution provider. Not hosted: produce it \
+                         with the export script."
+                    ),
+                    sources: ["drums", "bass", "other", "vocals"]
+                        .map(String::from)
+                        .to_vec(),
+                    sample_rate: 44100,
+                    channels: 2,
+                    file_size_mb: mb,
+                    download_url: None,
+                    sha256: Some(sha.to_string()),
+                },
+            );
+        }
     }
 
     /// List available models
@@ -161,7 +180,7 @@ impl ModelZoo {
             .get_model_path(name)
             .ok_or_else(|| CharonError::NotSupported(format!("Model {name} not downloaded")))?;
 
-        let mut config = if name == "htdemucs-split" {
+        let mut config = if name.starts_with("htdemucs-split") {
             ModelConfig::htdemucs_split(&model_path)
         } else {
             ModelConfig::htdemucs(&model_path)

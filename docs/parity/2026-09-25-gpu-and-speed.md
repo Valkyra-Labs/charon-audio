@@ -222,3 +222,106 @@ Open, with numbers to beat:
 - The split model is not hosted; the export is reproducible from the
   script and its hash is recorded.
 
+
+## 5. Second pass: one CoreML partition (same day, later)
+
+The 7 s cached load and the 0.235 s run hid a structural problem, found
+by listing the CoreML cache directory: ORT had split the graph into **26
+CoreML partitions** with 25 nodes on the CPU in between. The verbose
+session log names them: every `Conv`/`ConvTranspose` of the time branch,
+rejected with "Input shape {1,2,1,343980} exceeds CoreML convolution
+memory limit of 16384". The CoreML provider accepts only 4-D
+convolutions with spatial axes of at most 16384; the time branch works
+on 343980, 85995 and 21498 samples.
+
+Fix in the export (`tools/export/export_htdemucs.py`): every 1-D
+convolution runs as a 2-D convolution with height 1, and when its input
+exceeds 16384 samples the time axis is tiled into rows that carry the
+kernel's halo, so the 2-D convolution over `[B, C, rows, tile]` equals
+the 1-D one exactly (unit-checked at 0.0 for Conv, 3e-6 for
+ConvTranspose, which is expressed as zero-stuffing plus a convolution).
+The legacy TorchScript exporter mis-traces the tiling (a Concat with
+inconsistent shapes), so the tiled export uses the torch.export-based
+exporter (`--dynamo`, opset 18, external data folded back into one
+file).
+
+Stamp: same host and toolchain; `htdemucs_split_tiled.onnx` (172,439,242
+bytes, SHA-256 `782026bd0dbc67e97146271d813f0dc61f5242f80eeefbd6abee5dfe1839607d`),
+demucs 4.1.0, torch 2.14.0. Export parity 6.55e-5 through onnxruntime.
+
+### Partition count and per-run time (`ep_probe`, random input)
+
+| export | partitions | nodes on CPU | CoreML run | CPU run | CoreML load (cached) |
+|---|---|---|---|---|---|
+| split, 1-D convs (section 4) | 26 | 25 | 0.235 s | 0.61 s | 7.4 s |
+| split, 2-D convs, untiled (legacy exporter) | 26 | 25 | 0.212 s | 0.45 s | 7.4 s |
+| **split, 2-D convs, tiled (dynamo exporter)** | **1** | **0** | **0.157 s** | 0.54 s | 7.0 s |
+
+Other CoreML options on the tiled graph, all measured: compute units
+`All` (ANE+GPU) same run time as `CPUAndGPU`; `FastPrediction`
+specialization same; `NeuralNetwork` model format catastrophic (190 s
+per run, 10 GB). Batch-2 export: 0.267 s per segment on CoreML and
+0.84 s on CPU, worse than batch 1, dropped. fp16 weight conversion
+(onnxconverter-common) produced an invalid graph and then hung; not
+pursued.
+
+The cached load stays at 7 s with one partition, so it is CoreML's
+own compile-from-cache of the 2000-op program, not ORT partitioning.
+No option exposed by ORT changes it.
+
+### End to end, 193 s track, tiled export on CoreML (two passes)
+
+| | wall | peak RSS | separation only (`profile`) |
+|---|---|---|---|
+| before (section 4, 26 partitions) | 16.2 s | 3.8 GB | 8.2 s |
+| **tiled, one partition** | **13.35 / 13.36 s** | **2.6 GB** | **5.6 s (RTF 34)** |
+| PyTorch MPS (head-to-head record) | 9.0 s | 2.0 GB | |
+
+Of the 13.4 s, 7.0 s is the CoreML load, 5.6 s the separation, the rest
+decode and write. A resident process is at 5.6 s per 193 s track.
+
+Parity of the tiled CoreML path: synthetic clips max 1.8e-6 (112-128
+dB), MUSDB18 previews identical SDR to PyTorch on all stems with max
+2.4e-6 per track, all finite.
+
+### CPU artifact
+
+The tiling costs the CPU provider 20% (0.54 vs 0.45 s per run), and the
+dynamo exporter's graph is 10% slower on ORT CPU than the legacy
+exporter's for the same model (0.498 vs 0.451 s: different
+decompositions, fewer fusions). The CPU-target artifact is therefore the
+legacy export with 2-D, untiled convolutions (`--no-tiling`):
+
+Measured (`--no-tiling`, legacy exporter, SHA-256 `d5f43acb...`): 0.485 s
+per run, CLI 17.7 / 17.6 s, separation 16.5 s, peak 3.7 GB. That is the
+original split export's numbers (17.1 s CLI, 16.6 s separation) within
+noise, so the 2-D rewrite buys nothing on the CPU provider at pipeline
+level. The CPU artifact stays the original export (1-D convolutions,
+SHA-256 `6104c3de...`, byte-for-byte reproducible from the script with
+`--target cpu`).
+
+### Final artifacts
+
+| artifact | export flags | SHA-256 | size | for |
+|---|---|---|---|---|
+| `htdemucs_split.onnx` | `--target cpu` (legacy exporter, opset 17) | `6104c3de08607e0898f70835f1be1ff13a85bbea4826bdba80f9cb7b58fe088f` | 185,200,998 | CPU provider |
+| `htdemucs_split_coreml.onnx` | `--target coreml` (dynamo exporter, opset 18, tiled 2-D convs) | `782026bd0dbc67e97146271d813f0dc61f5242f80eeefbd6abee5dfe1839607d` | 172,439,242 | CoreML provider |
+
+Both use the same `DemucsSplit` contract and pass the same parity
+checks. Reproducibility: `--target cpu` re-exported byte-identical
+(same SHA-256). `--target coreml` re-exported with the same 2055 nodes,
+757 initializers, identical weights, names and op sequence, but a
+different SHA-256 (`30374a0a...`): the dynamo exporter's serialization
+is not byte-stable. Verify a re-export structurally, not by hash. Summary of the 193 s track, whole CLI, this host:
+
+| path | wall | peak RSS | separation |
+|---|---|---|---|
+| in-graph export, CPU (0.1.1 before this work) | 26.4 s | 2.1 GB | 22.8 s |
+| split, CPU | 17.1 s | 3.4 GB | 16.6 s |
+| split tiled, CoreML | 13.4 s | 2.6 GB | 5.6 s |
+| PyTorch CPU / MPS | 35.5 / 9.0 s | 2.3 / 2.0 GB | |
+
+Still open: the 7 s CoreML load per process (Apple's compile of the
+cached program; no ORT option changes it; a resident process avoids it),
+and ONNX Runtime's 2-3 GB activation memory on the CPU provider.
+

@@ -208,6 +208,9 @@ impl ModelConfig {
             // (docs/parity/2026-09-25-gpu-and-speed.md).
             onnx: OnnxOptions {
                 memory_pattern: false,
+                // Level 3 adds layout transforms that cost 4% on this graph
+                // on Apple Silicon (docs/parity/2026-09-25-gpu-and-speed.md).
+                optimization_level: OptimizationLevel::Extended,
                 ..OnnxOptions::default()
             },
             ..Self::htdemucs(model_path)
@@ -328,13 +331,17 @@ impl OnnxModel {
     ) -> Result<ort::session::builder::SessionBuilder> {
         // MLProgram is the current CoreML format; the model's time axis is
         // static, which lets CoreML compile fixed shapes.
-        let cache_dir = config.onnx.coreml_cache_dir.clone().unwrap_or_else(|| {
+        // ONNX Runtime keys the compiled model by path, not content: a
+        // re-exported model with the same name would load a stale compiled
+        // model and fail at run time. Key the directory by the file's hash.
+        let base = config.onnx.coreml_cache_dir.clone().unwrap_or_else(|| {
             config
                 .model_path
                 .parent()
                 .map(|p| p.join("coreml-cache"))
                 .unwrap_or_else(|| PathBuf::from("coreml-cache"))
         });
+        let cache_dir = base.join(&file_sha256_prefix(&config.model_path)?);
         std::fs::create_dir_all(&cache_dir)?;
         builder
             .with_execution_providers([
@@ -553,6 +560,16 @@ impl OnnxModel {
             .lock()
             .map_err(|_| CharonError::Model("ONNX session lock poisoned".to_string()))
     }
+}
+
+/// First 16 hex digits of the SHA-256 of a file (about 0.2 s for 200 MB)
+#[cfg(feature = "coreml")]
+fn file_sha256_prefix(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher)?;
+    Ok(format!("{:x}", hasher.finalize())[..16].to_string())
 }
 
 /// Generic model interface
