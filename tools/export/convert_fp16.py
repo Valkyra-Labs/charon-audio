@@ -4,7 +4,7 @@ graph inputs and outputs in fp32 (onnxconverter-common float16).
 Usage: python convert_fp16.py htdemucs_split.onnx htdemucs_split_fp16.onnx
 
 Prints size and SHA-256. Parity must be measured afterwards; fp16 changes
-the numbers (docs/parity)."""
+the numbers (docs/MEASUREMENTS.md)."""
 import hashlib, sys
 from pathlib import Path
 import onnx

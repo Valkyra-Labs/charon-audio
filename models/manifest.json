@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "source": "facebookresearch/demucs htdemucs (demucs 4.1.0), converted with tools/export/export_htdemucs.py",
+  "models": [
+    {
+      "name": "htdemucs",
+      "file": "htdemucs.onnx",
+      "contract": "waveform",
+      "provider": ["cpu"],
+      "sha256": "68d0bf16428ef66e692cdff8a9ccf28f1ef3f69440d57e58605a4cc55fcc5e74",
+      "size_bytes": 316446953,
+      "url": "https://huggingface.co/StemSplitio/htdemucs-onnx/resolve/main/htdemucs.onnx",
+      "sources": ["drums", "bass", "other", "vocals"],
+      "segment_samples": 343980
+    },
+    {
+      "name": "htdemucs-split",
+      "file": "htdemucs_split.onnx",
+      "contract": "demucs-split",
+      "provider": ["cpu"],
+      "sha256": "6104c3de08607e0898f70835f1be1ff13a85bbea4826bdba80f9cb7b58fe088f",
+      "size_bytes": 185200998,
+      "url": null,
+      "export": "tools/export/export_htdemucs.py --target cpu (demucs 4.1.0, torch 2.14.0)",
+      "sources": ["drums", "bass", "other", "vocals"],
+      "segment_samples": 343980
+    },
+    {
+      "name": "htdemucs-split-coreml",
+      "file": "htdemucs_split_coreml.onnx",
+      "contract": "demucs-split",
+      "provider": ["coreml", "cpu"],
+      "sha256": "782026bd0dbc67e97146271d813f0dc61f5242f80eeefbd6abee5dfe1839607d",
+      "size_bytes": 172439242,
+      "url": null,
+      "export": "tools/export/export_htdemucs.py --target coreml (demucs 4.1.0, torch 2.14.0)",
+      "sources": ["drums", "bass", "other", "vocals"],
+      "segment_samples": 343980
+    }
+  ]
+}

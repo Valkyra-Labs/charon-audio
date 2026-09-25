@@ -7,25 +7,25 @@ charon runs the [HTDemucs](https://github.com/facebookresearch/demucs)
 decoding, STFT/iSTFT, segmentation, overlap-add and output writing done
 in Rust. No Python at run time. On macOS the network runs on the GPU
 through CoreML. The pipeline reproduces Demucs 4.1.0 to float precision;
-every number in this file has a measurement record under
-[`docs/parity/`](docs/parity/).
+every number in this file comes from a recorded measurement, summarized
+in [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md).
 
 ## Status
 
 | Area | State |
 |---|---|
-| HTDemucs 4-stem separation, CPU | **Works.** Parity with PyTorch Demucs: max sample difference 1.2e-4 on synthetic input, equal median SDR on MUSDB18 test previews. See [Q1](docs/parity/2026-09-24-htdemucs-q1.md), [MUSDB7](docs/parity/2026-09-24-htdemucs-musdb7.md), [real tracks](docs/parity/2026-09-24-htdemucs-real-tracks.md). |
-| HTDemucs on the GPU (macOS, CoreML) | **Works** with the CoreML-target export (`coreml` feature): one CoreML partition, all nodes on the GPU. Output within 2e-6 of PyTorch. Separation 3x faster than the CPU path (5.6 s for a 193 s track); loading the compiled model costs 7 s per process. [Record](docs/parity/2026-09-25-gpu-and-speed.md). |
+| HTDemucs 4-stem separation, CPU | **Works.** Parity with PyTorch Demucs: max sample difference 1.2e-4 on synthetic input, equal median SDR on MUSDB18 test previews ([measurements](docs/MEASUREMENTS.md)). |
+| HTDemucs on the GPU (macOS, CoreML) | **Works** with the CoreML-target export (`coreml` feature): one CoreML partition, all nodes on the GPU. Output within 2e-6 of PyTorch. Separation 3x faster than the CPU path (5.6 s for a 193 s track); loading the compiled model costs 7 s per process. |
 | Input: WAV, FLAC, MP3, OGG/Vorbis, AAC/M4A, ALAC, AIFF, CAF, MKV (Symphonia 0.6) | Works. Decoded samples are not clipped. Only WAV, FLAC and MP3 are exercised by tests or records. |
 | Output: WAV 16/24-bit int, 32-bit float; FLAC 16/24-bit | Works, round-trip tested. |
 | Resampling to the model rate (rubato) | Works, time-aligned (impulse tests). |
-| Memory | Split export: 3.4 GB peak on CPU, 2.6 GB on CoreML (ONNX Runtime activation memory). In-graph export: 2.1 GB with its low-memory preset. [Memory record](docs/parity/2026-09-24-memory.md), [GPU record](docs/parity/2026-09-25-gpu-and-speed.md). |
-| Speed, 193 s track on an Apple M4 Pro | Resident server on CoreML: 6.2-6.4 s per track (PyTorch on MPS, model resident: 7.3-7.6 s). Cold process: 14.1 s CoreML, 16.7 s CPU (PyTorch cold: 8.7 s MPS, 35.2 s CPU). [Final head-to-head](docs/parity/2026-09-25-final-head-to-head.md). |
+| Memory | Split export: 3.4 GB peak on CPU, 2.6 GB on CoreML (ONNX Runtime activation memory). In-graph export: 2.1 GB with its low-memory preset. |
+| Speed, 193 s track on an Apple M4 Pro | Resident server on CoreML: 6.2-6.4 s per track (PyTorch on MPS, model resident: 7.3-7.6 s). Cold process: 14.1 s CoreML, 16.7 s CPU (PyTorch cold: 8.7 s MPS, 35.2 s CPU). Full table in [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md). |
 | Other models (MDX-Net, RoFormer, Open-Unmix, htdemucs_ft/6s) | **Not supported.** Each needs its own tensor contract and parity check. |
 | CUDA, WebGPU | **Not supported.** CUDA is unmeasured (no hardware). WebGPU runs the in-graph export but slower than CPU. |
-| Split export hosting | The split models are not hosted yet. Produce them with `tools/export/export_htdemucs.py` (PyTorch + demucs 4.1.0). The CPU export is byte-for-byte reproducible; the CoreML export reproduces the same weights, names and operators but not the same bytes (dynamo exporter serialization). Hashes of the measured artifacts are recorded. |
+| Split export hosting | Not hosted yet. Produce the files with `tools/export/export_htdemucs.py` (PyTorch + demucs 4.1.0); hashes, verification and the hosting steps are in [docs/MODELS.md](docs/MODELS.md). |
 | Real-time (CPAL) | Experimental, behind the `realtime` feature, not real-time safe, no tests. |
-| Model download / zoo | Not implemented. `ModelZoo` holds metadata only; download the model yourself (below). |
+| Model download / zoo | Not implemented. `ModelZoo` and `models/manifest.json` hold names, hashes and URLs; fetch the files yourself (below). |
 | `charon` binary | `charon separate`, and `charon serve`: a resident server that keeps the model (and the compiled CoreML model) loaded and answers jobs over a Unix socket. 6.3 s per 193 s track on CoreML with the server warm. |
 | C ABI, Python bindings | Not in this release. |
 
@@ -81,8 +81,7 @@ The script checks each export against PyTorch before writing and prints
 the SHA-256. With demucs 4.1.0 and torch 2.14.0 the CPU export hashes
 to `6104c3de...8fe088f` every time; the CoreML export is structurally
 identical between runs but its bytes differ (the measured artifact was
-`782026bd...839607d`), see the
-[GPU record](docs/parity/2026-09-25-gpu-and-speed.md). Then:
+`782026bd...839607d`), see [docs/MODELS.md](docs/MODELS.md). Then:
 
 ```bash
 cargo run --release --example separate -- song.mp3 stems/ htdemucs_split.onnx --split
@@ -166,8 +165,9 @@ them.
 
 ## Measurements
 
-All records are in [`docs/parity/`](docs/parity/) with build hash,
-model hash, versions, host and method. Summary, Apple M4 Pro, CPU:
+Every record carries build hash, model hash, versions, host and method;
+[docs/MEASUREMENTS.md](docs/MEASUREMENTS.md) has the tables and
+`tools/parity/` the scripts. Summary, Apple M4 Pro:
 
 - Parity with PyTorch demucs 4.1.0 (`shifts=0`): max sample difference
   1.2e-4 on synthetic clips, 9.3e-4 on three full-length tracks;
@@ -181,8 +181,13 @@ model hash, versions, host and method. Summary, Apple M4 Pro, CPU:
 - In-graph export, 193 s track: 2.12 GB peak (low-memory preset),
   5.58 GB (`max_speed`); 26.4 s end to end.
 - Head-to-head on the same track and machine against PyTorch (CPU,
-  MPS, cold and resident), stem-splitter-core and demucs-rs:
-  [final record](docs/parity/2026-09-25-final-head-to-head.md).
+  MPS, cold and resident), stem-splitter-core and demucs-rs: resident
+  charon on CoreML 6.2-6.4 s, PyTorch MPS resident 7.3-7.6 s, PyTorch
+  MPS cold 8.7 s, demucs-rs 13.7 s (with NaN output), charon cold
+  14.1 s CoreML / 16.7 s CPU, stem-splitter-core 27.3 s, PyTorch CPU
+  35.2 s. Quality on MUSDB previews: charon equals PyTorch,
+  stem-splitter-core 0.2-0.3 dB lower, demucs-rs lower with 6 of 50
+  tracks NaN.
 
 ## Building
 
@@ -213,10 +218,13 @@ macOS), `realtime` (CPAL input, experimental), `ep-experimental`
 - `src/stft.rs`: Demucs STFT/iSTFT (`_spec`/`_ispec`) with realfft.
 - `src/processor.rs`: segmentation, overlap-add, shifts, normalization.
 - `src/separator.rs`: `Separator`, `SeparatorConfig`, `Stems`.
-- `tests/`: identity-model pipeline tests, real-model regression test.
-- `tools/parity/`: scripts that produced the records in `docs/parity/`.
-- `tools/export/`: the split-transform ONNX export.
-- `docs/audit/`: the audit and plan this release was built against.
+- `src/bin/charon.rs`: the CLI and the resident server.
+- `tests/`: identity-model pipeline tests, real-model regression tests.
+- `tools/parity/`: the measurement scripts; `tools/export/`: the
+  split-transform ONNX export.
+- `models/`: manifest and checksums of the supported model files.
+- `docs/`: [MEASUREMENTS](docs/MEASUREMENTS.md), [MODELS](docs/MODELS.md),
+  [IMPLEMENTATION](docs/IMPLEMENTATION.md), [CONTRIBUTING](docs/CONTRIBUTING.md).
 
 ## Changelog
 

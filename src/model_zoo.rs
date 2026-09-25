@@ -77,7 +77,7 @@ impl ModelZoo {
 
     fn register_split_models(&mut self) {
         // Both are produced by tools/export/export_htdemucs.py; neither is
-        // hosted yet. Hashes and measurements: docs/parity/2026-09-25-gpu-and-speed.md.
+        // hosted yet. Hashes and measurements: docs/MEASUREMENTS.md.
         for (name, target, sha, mb) in [
             (
                 "htdemucs-split",

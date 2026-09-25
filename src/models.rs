@@ -69,7 +69,7 @@ pub enum ExecutionProvider {
     /// Apple CoreML (GPU), with CPU fallback for unsupported operators.
     /// Needs the `coreml` feature. Runs the split-transform HTDemucs
     /// export; the in-graph-STFT export fails on it
-    /// (docs/parity/2026-09-24-memory.md).
+    /// (docs/MEASUREMENTS.md).
     CoreMl,
     /// CoreML when the feature is enabled and the session builds, else CPU
     #[default]
@@ -152,7 +152,7 @@ impl Default for OnnxOptions {
 
 impl OnnxOptions {
     /// Settings measured to cut peak memory on HTDemucs from 5.6 GB to
-    /// 2.1 GB at an 11% throughput cost (docs/parity/2026-09-24-memory.md):
+    /// 2.1 GB at an 11% throughput cost (docs/MEASUREMENTS.md):
     /// constant folding off (it materializes about 3.8 GB of index tensors
     /// at load) and no memory-pattern pre-planning.
     pub fn low_memory() -> Self {
@@ -205,11 +205,11 @@ impl ModelConfig {
             contract: ModelContract::demucs_split(),
             // No index constants to fold any more; memory-pattern planning
             // still costs 2 GB of peak on the CPU path for 6% of time
-            // (docs/parity/2026-09-25-gpu-and-speed.md).
+            // (docs/MEASUREMENTS.md).
             onnx: OnnxOptions {
                 memory_pattern: false,
                 // Level 3 adds layout transforms that cost 4% on this graph
-                // on Apple Silicon (docs/parity/2026-09-25-gpu-and-speed.md).
+                // on Apple Silicon (docs/MEASUREMENTS.md).
                 optimization_level: OptimizationLevel::Extended,
                 ..OnnxOptions::default()
             },

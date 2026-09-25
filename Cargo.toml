@@ -9,9 +9,10 @@ description = "Rust music source separation pipeline for ONNX models"
 keywords = ["audio", "music", "separation", "ml", "demucs"]
 categories = ["multimedia::audio", "science"]
 readme = "README.md"
-repository = "https://github.com/Valkyra-Labs/charon-audio"
-homepage = "https://github.com/Valkyra-Labs/charon-audio"
+repository = "https://github.com/ZCI-Tech/charon-audio"
+homepage = "https://github.com/ZCI-Tech/charon-audio"
 documentation = "https://docs.rs/charon-audio"
+exclude = [".github/", "tools/", "docs/audit/", "docs/parity/", "models/*.onnx"]
 
 [dependencies]
 # ML inference. ONNX Runtime release candidates break API between RCs, so the
