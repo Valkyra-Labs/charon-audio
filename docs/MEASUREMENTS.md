@@ -74,7 +74,7 @@ model loaded once, three consecutive jobs. Script:
 | stem-splitter-core 1.2.0 | CPU | cold | 27.28 s | 4.9 GB |
 | PyTorch demucs 4.1.0 | CPU | resident | 33.8 s | |
 | PyTorch demucs 4.1.0 | CPU | cold | 35.20 s | 2.6 GB |
-| Charon 0.1.1 before this work (in-graph export, CPU) | CPU | cold | 26.4 s | 2.1 GB |
+| Charon, in-graph export (the first working path, before the split export) | CPU | cold | 26.4 s | 2.1 GB |
 
 Separation only (`examples/profile`), split exports: 16.6 s on CPU
 (11.6x faster than real time), 5.6 s on CoreML (34x). A cold CoreML process spends
