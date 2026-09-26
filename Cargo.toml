@@ -79,10 +79,10 @@ decode = ["dep:symphonia"]
 aac = ["decode", "symphonia/aac"]
 realtime = ["dep:cpal"]
 # Apple CoreML execution provider (macOS). Used by the split-transform
-# HTDemucs export; measured in docs/parity/2026-09-25-gpu-and-speed.md.
+# HTDemucs export; measured in docs/MEASUREMENTS.md.
 coreml = ["ort-backend", "ort/coreml", "dep:sha2"]
 # GPU execution providers for measurement only (examples/ep_probe). Not a
-# supported path: see docs/parity for what was measured.
+# supported path: see docs/MEASUREMENTS.md for what was measured.
 ep-experimental = ["coreml", "ort/webgpu"]
 
 [package.metadata.docs.rs]

@@ -17,8 +17,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Tolerance on 50 ms frame RMS, the Q1 parity criterion
-/// (docs/parity/2026-09-24-htdemucs-q1.md). The measured max waveform
+/// Tolerance on 50 ms frame RMS, the parity criterion (docs/MEASUREMENTS.md).
+/// The measured max waveform
 /// difference against PyTorch was 1.2e-4.
 const RMS_TOLERANCE: f32 = 1e-3;
 
