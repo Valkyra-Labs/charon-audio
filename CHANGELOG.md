@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.2 (unreleased)
+## 0.1.2 (2026-09-26)
 
 ### Added
 - Progress and cancellation: `Separator::separate_with` and
