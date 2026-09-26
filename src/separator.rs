@@ -1,15 +1,19 @@
 //! Main separator API
 
 use crate::audio::{AudioBuffer, AudioFile, BitDepth};
+use crate::control::Control;
 use crate::error::{CharonError, Result};
 #[cfg(feature = "ort-backend")]
 use crate::models::ModelBackend;
 use crate::models::{Model, ModelConfig};
 use crate::processor::{ProcessConfig, Processor};
+use crate::regions::{self, RegionPlan, RegionWriter, SubSource, REGION_OUTPUTS};
+use crate::stream::{AudioSource, StemSink};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Separator configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +68,32 @@ impl SeparatorConfig {
             model,
             ..Self::default()
         }
+    }
+
+    /// Configuration for the music branch of TIGER-DnR
+    /// (see [`ModelConfig::tiger_music`]): no input normalization (the
+    /// network normalizes internally), 12 s windows with half overlap.
+    #[cfg(feature = "ort-backend")]
+    pub fn tiger_music<P: AsRef<Path>>(model_path: P) -> Self {
+        let mut model = ModelConfig::tiger_music(model_path);
+        model.backend = Some(ModelBackend::OnnxRuntime);
+        Self {
+            model,
+            process: ProcessConfig {
+                segment_length: None,
+                overlap: 0.5,
+                shifts: 1,
+                normalize: false,
+                blend: crate::processor::Blend::Triangle,
+            },
+            ..Self::default()
+        }
+    }
+
+    /// Set the overlap between model windows, in `[0, 1)`
+    pub fn with_overlap(mut self, overlap: f32) -> Self {
+        self.process.overlap = overlap;
+        self
     }
 
     /// Set number of ensemble shifts
@@ -181,7 +211,7 @@ impl Stems {
 
 /// Main separator for audio source separation
 pub struct Separator {
-    model: Model,
+    model: Arc<Model>,
     processor: Processor,
     config: SeparatorConfig,
 }
@@ -189,7 +219,7 @@ pub struct Separator {
 impl Separator {
     /// Create new separator from configuration
     pub fn new(config: SeparatorConfig) -> Result<Self> {
-        let model = Model::from_config(config.model.clone())?;
+        let model = Arc::new(Model::from_config(config.model.clone())?);
         let processor = Processor::new(config.process.clone());
 
         Ok(Self {
@@ -199,6 +229,20 @@ impl Separator {
         })
     }
 
+    /// A separator with other processing settings (overlap, blend, ...)
+    /// on the same loaded model, without loading it again. The two share
+    /// one ONNX Runtime session, so their runs take turns; for runs at
+    /// the same time, create another separator with [`Separator::new`].
+    pub fn with_process_config(&self, process: ProcessConfig) -> Self {
+        let mut config = self.config.clone();
+        config.process = process.clone();
+        Self {
+            model: Arc::clone(&self.model),
+            processor: Processor::new(process),
+            config,
+        }
+    }
+
     /// Create separator with default configuration
     pub fn with_default_model() -> Result<Self> {
         Self::new(SeparatorConfig::default())
@@ -206,6 +250,34 @@ impl Separator {
 
     /// Separate audio buffer into stems
     pub fn separate(&self, audio: &AudioBuffer) -> Result<Stems> {
+        if !self.config.show_progress {
+            return self.separate_with(audio, &Control::default());
+        }
+        let pb = ProgressBar::new(0);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>5}/{len:5} {msg}")
+                .unwrap()
+                .progress_chars("=>-"),
+        );
+        pb.set_message("Separating audio...");
+        let bar = pb.clone();
+        let control = Control::new().with_progress(move |p| {
+            bar.set_length(p.total as u64);
+            bar.set_position(p.done as u64);
+        });
+        let stems = self.separate_with(audio, &control);
+        match &stems {
+            Ok(_) => pb.finish_with_message("Separation complete!"),
+            Err(_) => pb.abandon(),
+        }
+        stems
+    }
+
+    /// Separate audio buffer into stems, reporting progress through
+    /// `control` and stopping with [`CharonError::Cancelled`] when it is
+    /// cancelled.
+    pub fn separate_with(&self, audio: &AudioBuffer, control: &Control) -> Result<Stems> {
         // Resample if needed
         let audio = if audio.sample_rate != self.config.model.sample_rate {
             audio.resample(self.config.model.sample_rate)?
@@ -213,34 +285,15 @@ impl Separator {
             audio.clone()
         };
 
-        // Convert channels if needed
-        let audio = if audio.channels() != self.config.model.channels {
-            audio.convert_channels(self.config.model.channels)?
-        } else {
-            audio
-        };
+        // Convert channels if needed (per-channel models take any layout)
+        let audio =
+            if !self.config.model.per_channel && audio.channels() != self.config.model.channels {
+                audio.convert_channels(self.config.model.channels)?
+            } else {
+                audio
+            };
 
-        // Create progress bar
-        let pb = if self.config.show_progress {
-            let pb = ProgressBar::new(100);
-            pb.set_style(
-                ProgressStyle::default_bar()
-                    .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}")
-                    .unwrap()
-                    .progress_chars("=>-"),
-            );
-            pb.set_message("Separating audio...");
-            Some(pb)
-        } else {
-            None
-        };
-
-        // Process audio
-        let separated = self.processor.process(&self.model, &audio)?;
-
-        if let Some(pb) = &pb {
-            pb.finish_with_message("Separation complete!");
-        }
+        let separated = self.processor.process_with(&self.model, &audio, control)?;
 
         if separated.len() != self.config.model.sources.len() {
             return Err(CharonError::Model(format!(
@@ -261,13 +314,149 @@ impl Separator {
         Ok(Stems::from_ordered(stems))
     }
 
+    /// Separate a source of any length into `sink` with bounded memory.
+    ///
+    /// The source must have the model's sample rate and channel count
+    /// (resample and remix before, for example while decoding); time shifts
+    /// are not supported. Output is identical to [`Separator::separate_with`]
+    /// on the same audio.
+    pub fn separate_stream(
+        &self,
+        source: &mut dyn AudioSource,
+        sink: &mut dyn StemSink,
+        control: &Control,
+    ) -> Result<()> {
+        let model = &self.config.model;
+        if source.sample_rate() != model.sample_rate
+            || (!model.per_channel && source.channels() != model.channels)
+        {
+            return Err(CharonError::InvalidConfig(format!(
+                "stream is {} Hz, {} channels; the model needs {} Hz, {} channels",
+                source.sample_rate(),
+                source.channels(),
+                model.sample_rate,
+                model.channels
+            )));
+        }
+        self.processor
+            .process_stream(&self.model, source, sink, &model.sources, control)
+    }
+
+    /// Reduce one stem inside regions and leave the rest of the input
+    /// untouched.
+    ///
+    /// Writes two stems to `sink`, named by [`REGION_OUTPUTS`]: the
+    /// processed mix (equal to the input bit for bit outside the regions)
+    /// and the part that was subtracted (silent outside the regions). Each
+    /// region is separated with `plan.context` samples of audio around it;
+    /// the subtraction fades over `plan.crossfade` samples at the edges.
+    /// The source must have the model's sample rate and channel count.
+    /// Progress counts the model windows of all regions together.
+    pub fn remove_in_regions(
+        &self,
+        source: &mut dyn AudioSource,
+        plan: &RegionPlan,
+        sink: &mut dyn StemSink,
+        control: &Control,
+    ) -> Result<()> {
+        let model = &self.config.model;
+        if source.sample_rate() != model.sample_rate
+            || (!model.per_channel && source.channels() != model.channels)
+        {
+            return Err(CharonError::InvalidConfig(format!(
+                "stream is {} Hz, {} channels; the model needs {} Hz, {} channels",
+                source.sample_rate(),
+                source.channels(),
+                model.sample_rate,
+                model.channels
+            )));
+        }
+        let target = model
+            .sources
+            .iter()
+            .position(|name| *name == plan.target)
+            .ok_or_else(|| {
+                CharonError::InvalidConfig(format!(
+                    "the model has no stem named {:?} (it has {:?})",
+                    plan.target, model.sources
+                ))
+            })?;
+        let (len, channels, rate) = (source.len(), source.channels(), source.sample_rate());
+        let ordered = regions::sorted_regions(plan, len)?;
+        let outputs: Vec<String> = REGION_OUTPUTS.iter().map(|s| s.to_string()).collect();
+        sink.begin(&outputs, channels, rate)?;
+
+        let spans: Vec<(usize, usize)> = ordered
+            .iter()
+            .map(|r| regions::span(r, plan.context, len))
+            .collect();
+        let mut windows = Vec::with_capacity(spans.len());
+        for &(a, b) in &spans {
+            windows.push(
+                self.processor
+                    .stream_window_count(&self.model, b - a, rate)?,
+            );
+        }
+        let total: usize = windows.iter().sum();
+
+        let shared = std::cell::RefCell::new(source);
+        let mut written = 0usize;
+        let mut done_before = 0usize;
+        for (i, region) in ordered.iter().enumerate() {
+            let (span_start, span_end) = spans[i];
+            // This region writes up to the next region's start (or the end
+            // of its own span), so neighbours never overwrite each other.
+            let write_to = match ordered.get(i + 1) {
+                Some(next) => span_end.min(next.start).max(region.end),
+                None => span_end,
+            };
+            if span_start > written {
+                regions::copy_through(&shared, sink, channels, written, span_start, control)?;
+                written = span_start;
+            }
+            let mut sub = SubSource {
+                inner: &shared,
+                offset: span_start,
+                len: span_end - span_start,
+                channels,
+                rate,
+            };
+            let mut writer = RegionWriter {
+                source: &shared,
+                sink: &mut *sink,
+                region: *region,
+                crossfade: plan.crossfade,
+                target,
+                pos: span_start,
+                write_from: written,
+                write_to,
+            };
+            let part = control.part(done_before, total);
+            self.processor.process_stream(
+                &self.model,
+                &mut sub,
+                &mut writer,
+                &model.sources,
+                &part,
+            )?;
+            done_before += windows[i];
+            written = write_to;
+        }
+        if written < len {
+            regions::copy_through(&shared, sink, channels, written, len, control)?;
+        }
+        sink.finish()
+    }
+
     /// Separate audio from file
+    #[cfg(feature = "decode")]
     pub fn separate_file<P: AsRef<Path>>(&self, path: P) -> Result<Stems> {
         let audio = AudioFile::read(path)?;
         self.separate(&audio)
     }
 
     /// Separate audio and save stems
+    #[cfg(feature = "decode")]
     pub fn separate_and_save<P: AsRef<Path>, O: AsRef<Path>>(
         &self,
         input_path: P,
@@ -278,6 +467,7 @@ impl Separator {
     }
 
     /// Batch separate multiple files
+    #[cfg(feature = "decode")]
     pub fn separate_batch<P: AsRef<Path>, O: AsRef<Path>>(
         &self,
         input_paths: &[P],
@@ -312,7 +502,7 @@ impl Separator {
 
     /// Execution provider the model runs on ("CPU" or "CoreML")
     pub fn provider(&self) -> &'static str {
-        match self.model {
+        match *self.model {
             #[cfg(feature = "ort-backend")]
             Model::Onnx(ref m) => m.provider(),
         }

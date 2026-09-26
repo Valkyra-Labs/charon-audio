@@ -6,8 +6,10 @@
 //! the reference implementation.
 
 use crate::audio::AudioBuffer;
+use crate::control::{Control, Progress};
 use crate::error::{CharonError, Result};
 use crate::models::Model;
+use crate::stream::{AudioSource, StemSink};
 use ndarray::{s, Array2, ArrayView2};
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +26,20 @@ pub struct ProcessConfig {
     pub shifts: usize,
     /// Normalize input by the mono reference mean/std (Demucs convention)
     pub normalize: bool,
+    /// How overlapping windows are blended
+    #[serde(default)]
+    pub blend: Blend,
+}
+
+/// Weighting of overlapping model windows in overlap-add.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Blend {
+    /// Triangular weights peaking mid-window (Demucs `apply_model`)
+    #[default]
+    Triangle,
+    /// Equal weights: a plain average of the windows covering a sample
+    /// (TIGER's `wav_chunk_inference`)
+    Uniform,
 }
 
 impl Default for ProcessConfig {
@@ -33,6 +49,7 @@ impl Default for ProcessConfig {
             overlap: 0.25,
             shifts: 1,
             normalize: true,
+            blend: Blend::Triangle,
         }
     }
 }
@@ -50,6 +67,18 @@ impl Processor {
 
     /// Process audio buffer with model
     pub fn process(&self, model: &Model, audio: &AudioBuffer) -> Result<Vec<AudioBuffer>> {
+        self.process_with(model, audio, &Control::default())
+    }
+
+    /// Process audio buffer with model, reporting progress per model window
+    /// and stopping with [`CharonError::Cancelled`] when `control` is
+    /// cancelled.
+    pub fn process_with(
+        &self,
+        model: &Model,
+        audio: &AudioBuffer,
+        control: &Control,
+    ) -> Result<Vec<AudioBuffer>> {
         if audio.samples() == 0 {
             return Err(CharonError::Audio("Input audio is empty".to_string()));
         }
@@ -68,10 +97,22 @@ impl Processor {
         let input = audio.data.mapv(|x| (x - mean) / std);
 
         let segment = self.segment_samples(model, audio.sample_rate)?;
+        let mut tracker = Tracker {
+            control,
+            done: 0,
+            total: self.window_count(audio.samples(), segment, audio.sample_rate),
+        };
+        tracker.check()?;
         let separated = if self.config.shifts > 1 {
-            self.process_shifted(model, input.view(), segment, audio.sample_rate)?
+            self.process_shifted(
+                model,
+                input.view(),
+                segment,
+                audio.sample_rate,
+                &mut tracker,
+            )?
         } else {
-            self.process_split(model, input.view(), segment)?
+            self.process_split(model, input.view(), segment, &mut tracker)?
         };
 
         Ok(separated
@@ -81,6 +122,54 @@ impl Processor {
                 AudioBuffer::new(source, audio.sample_rate)
             })
             .collect())
+    }
+
+    /// Number of model windows a streaming job over `length` samples runs.
+    pub(crate) fn stream_window_count(
+        &self,
+        model: &Model,
+        length: usize,
+        sample_rate: u32,
+    ) -> Result<usize> {
+        let segment = self.segment_samples(model, sample_rate)?;
+        Ok(self.window_count(length, segment, sample_rate))
+    }
+
+    /// Number of model windows a job over `length` samples runs.
+    fn window_count(&self, length: usize, segment: Option<usize>, sample_rate: u32) -> usize {
+        let per_pass = |len: usize| match segment {
+            None => 1,
+            Some(segment) => {
+                let stride = self.stride(segment);
+                len.div_ceil(stride)
+            }
+        };
+        if self.config.shifts > 1 {
+            let max_shift = sample_rate as usize / 2;
+            (0..self.config.shifts)
+                .map(|i| {
+                    let offset = i * max_shift / self.config.shifts;
+                    per_pass(length + max_shift - offset)
+                })
+                .sum()
+        } else {
+            per_pass(length)
+        }
+    }
+
+    fn window_weight(&self, segment: usize) -> Vec<f32> {
+        match self.config.blend {
+            Blend::Triangle => triangle_weight(segment),
+            Blend::Uniform => vec![1.0; segment],
+        }
+    }
+
+    /// Window stride in samples: `(1 - overlap) * segment`, computed in
+    /// f64 and rounded, so that an overlap of 2/3 on 529200 samples gives
+    /// exactly 176400 (f32 and truncation gave 176399, which shifts every
+    /// window by one more sample than the previous one).
+    fn stride(&self, segment: usize) -> usize {
+        (((1.0 - self.config.overlap as f64) * segment as f64).round() as usize).max(1)
     }
 
     fn segment_samples(&self, model: &Model, sample_rate: u32) -> Result<Option<usize>> {
@@ -107,6 +196,7 @@ impl Processor {
         input: ArrayView2<f32>,
         segment: Option<usize>,
         sample_rate: u32,
+        tracker: &mut Tracker,
     ) -> Result<Vec<Array2<f32>>> {
         let (channels, length) = input.dim();
         let shifts = self.config.shifts;
@@ -121,7 +211,7 @@ impl Processor {
         for shift_idx in 0..shifts {
             let offset = shift_idx * max_shift / shifts;
             let shifted = padded.slice(s![.., offset..offset + length + max_shift - offset]);
-            let separated = self.process_split(model, shifted, segment)?;
+            let separated = self.process_split(model, shifted, segment, tracker)?;
 
             let acc = accumulated
                 .get_or_insert_with(|| vec![Array2::zeros((channels, length)); separated.len()]);
@@ -144,14 +234,17 @@ impl Processor {
         model: &Model,
         input: ArrayView2<f32>,
         segment: Option<usize>,
+        tracker: &mut Tracker,
     ) -> Result<Vec<Array2<f32>>> {
         let (channels, length) = input.dim();
         let Some(segment) = segment else {
-            return self.run_window(model, input, length, 0, length);
+            let out = self.run_window(model, input, length, 0, length)?;
+            tracker.step()?;
+            return Ok(out);
         };
 
-        let stride = (((1.0 - self.config.overlap) * segment as f32) as usize).max(1);
-        let weight = triangle_weight(segment);
+        let stride = self.stride(segment);
+        let weight = self.window_weight(segment);
 
         let mut out: Option<Vec<Array2<f32>>> = None;
         let mut sum_weight = vec![0.0f32; length];
@@ -159,6 +252,7 @@ impl Processor {
         for offset in (0..length).step_by(stride) {
             let chunk_len = segment.min(length - offset);
             let chunk_out = self.run_window(model, input, segment, offset, chunk_len)?;
+            tracker.step()?;
 
             let out =
                 out.get_or_insert_with(|| vec![Array2::zeros((channels, length)); chunk_out.len()]);
@@ -214,9 +308,22 @@ impl Processor {
             .slice_mut(s![.., dst_start..dst_start + (src_end - src_start)])
             .assign(&input.slice(s![.., src_start..src_end]));
 
-        let trim = delta / 2;
+        self.infer_trimmed(model, &padded, window, chunk_len)
+    }
+
+    /// Run the model on a full window and centre-trim every source back to
+    /// `chunk_len` samples.
+    fn infer_trimmed(
+        &self,
+        model: &Model,
+        padded: &Array2<f32>,
+        window: usize,
+        chunk_len: usize,
+    ) -> Result<Vec<Array2<f32>>> {
+        let channels = padded.nrows();
+        let trim = (window - chunk_len) / 2;
         model
-            .infer(&padded)?
+            .infer(padded)?
             .into_iter()
             .map(|source| {
                 if source.dim() != (channels, window) {
@@ -228,6 +335,221 @@ impl Processor {
                 Ok(source.slice(s![.., trim..trim + chunk_len]).to_owned())
             })
             .collect()
+    }
+
+    /// Separate a source of any length into `sink` with bounded memory.
+    ///
+    /// Output is identical to [`Processor::process_with`] on the same input.
+    /// The source must already have the model's sample rate and channel
+    /// count. Time shifts (`shifts > 1`) are not supported here.
+    pub fn process_stream(
+        &self,
+        model: &Model,
+        source: &mut dyn AudioSource,
+        sink: &mut dyn StemSink,
+        stems: &[String],
+        control: &Control,
+    ) -> Result<()> {
+        let length = source.len();
+        let channels = source.channels();
+        let rate = source.sample_rate();
+        if length == 0 {
+            return Err(CharonError::Audio("Input audio is empty".to_string()));
+        }
+        if !(0.0..1.0).contains(&self.config.overlap) {
+            return Err(CharonError::InvalidConfig(format!(
+                "overlap must be in [0, 1), got {}",
+                self.config.overlap
+            )));
+        }
+        if self.config.shifts > 1 {
+            return Err(CharonError::NotSupported(
+                "time shifts in streaming separation".to_string(),
+            ));
+        }
+
+        let segment = self.segment_samples(model, rate)?;
+        let Some(segment) = segment else {
+            // One window over the whole input: nothing to stream.
+            let mut data = Array2::zeros((channels, length));
+            source.read(0, data.view_mut())?;
+            let separated = self.process_with(model, &AudioBuffer::new(data, rate), control)?;
+            check_stem_count(stems, separated.len())?;
+            sink.begin(stems, channels, rate)?;
+            for (i, stem) in separated.iter().enumerate() {
+                sink.write(i, stem.data.view())?;
+            }
+            return sink.finish();
+        };
+
+        let (mean, std) = if self.config.normalize {
+            stream_stats(source)?
+        } else {
+            (0.0, 1.0)
+        };
+        let mut tracker = Tracker {
+            control,
+            done: 0,
+            total: self.window_count(length, Some(segment), rate),
+        };
+        tracker.check()?;
+        sink.begin(stems, channels, rate)?;
+
+        let stride = self.stride(segment);
+        let weight = self.window_weight(segment);
+        // Pending (not yet final) output, starting at sample `emitted`.
+        let mut acc: Vec<Array2<f32>> = vec![Array2::zeros((channels, 0)); stems.len()];
+        let mut sum_weight: Vec<f32> = Vec::new();
+        let mut emitted = 0usize;
+
+        for offset in (0..length).step_by(stride) {
+            let chunk_len = segment.min(length - offset);
+            let padded = read_window(source, mean, std, segment, offset, chunk_len)?;
+            let chunk_out = self.infer_trimmed(model, &padded, segment, chunk_len)?;
+            tracker.step()?;
+            check_stem_count(stems, chunk_out.len())?;
+
+            let rel = offset - emitted;
+            let need = rel + chunk_len;
+            if sum_weight.len() < need {
+                sum_weight.resize(need, 0.0);
+                for a in &mut acc {
+                    let mut grown = Array2::zeros((channels, need));
+                    grown.slice_mut(s![.., ..a.ncols()]).assign(a);
+                    *a = grown;
+                }
+            }
+            let w = &weight[..chunk_len];
+            for (dst, src) in acc.iter_mut().zip(&chunk_out) {
+                for ch in 0..channels {
+                    let mut dst_row = dst.slice_mut(s![ch, rel..rel + chunk_len]);
+                    let src_row = src.row(ch);
+                    for ((d, &x), &wi) in dst_row.iter_mut().zip(src_row.iter()).zip(w) {
+                        *d += x * wi;
+                    }
+                }
+            }
+            for (a, &wi) in sum_weight[rel..rel + chunk_len].iter_mut().zip(w) {
+                *a += wi;
+            }
+
+            // Windows start at multiples of `stride`, so nothing after this
+            // one touches samples before `offset + stride`.
+            let final_upto = (offset + stride).min(length);
+            let k = final_upto - emitted;
+            for (i, a) in acc.iter_mut().enumerate() {
+                let mut block = a.slice(s![.., ..k]).to_owned();
+                for mut row in block.rows_mut() {
+                    for (x, &wsum) in row.iter_mut().zip(&sum_weight[..k]) {
+                        *x /= wsum;
+                    }
+                }
+                block.mapv_inplace(|x| x * std + mean);
+                sink.write(i, block.view())?;
+                *a = a.slice(s![.., k..]).to_owned();
+            }
+            sum_weight.drain(..k);
+            emitted = final_upto;
+        }
+        sink.finish()
+    }
+}
+
+fn check_stem_count(stems: &[String], produced: usize) -> Result<()> {
+    if produced != stems.len() {
+        return Err(CharonError::Model(format!(
+            "model produced {produced} sources, config names {}",
+            stems.len()
+        )));
+    }
+    Ok(())
+}
+
+/// Read `source[offset..offset + chunk_len]` normalized and centred in a
+/// window of `window` samples, real audio around the chunk where the
+/// source has it and zeros elsewhere (the streaming twin of
+/// `Processor::run_window`).
+fn read_window(
+    source: &mut dyn AudioSource,
+    mean: f32,
+    std: f32,
+    window: usize,
+    offset: usize,
+    chunk_len: usize,
+) -> Result<Array2<f32>> {
+    let channels = source.channels();
+    let total = source.len();
+    let delta = window - chunk_len;
+    let start = offset as isize - (delta / 2) as isize;
+    let end = start + window as isize;
+    let src_start = start.max(0) as usize;
+    let src_end = (end.min(total as isize)) as usize;
+    let dst_start = (src_start as isize - start) as usize;
+
+    let mut padded = Array2::zeros((channels, window));
+    let mut region = padded.slice_mut(s![.., dst_start..dst_start + (src_end - src_start)]);
+    source.read(src_start, region.view_mut())?;
+    region.mapv_inplace(|x| (x - mean) / std);
+    Ok(padded)
+}
+
+/// [`reference_stats`] over a source read in blocks, with the same
+/// arithmetic in the same order, so the result is bit-identical.
+fn stream_stats(source: &mut dyn AudioSource) -> Result<(f32, f32)> {
+    const BLOCK: usize = 1 << 16;
+    let (channels, n) = (source.channels(), source.len());
+    let mut buf = Array2::zeros((channels, BLOCK.min(n)));
+    let mut mono_blocks = |source: &mut dyn AudioSource, f: &mut dyn FnMut(f32)| -> Result<()> {
+        let mut start = 0;
+        while start < n {
+            let len = BLOCK.min(n - start);
+            let mut view = buf.slice_mut(s![.., ..len]);
+            source.read(start, view.view_mut())?;
+            let mono = view
+                .mean_axis(ndarray::Axis(0))
+                .expect("audio has at least one channel");
+            for &x in mono.iter() {
+                f(x);
+            }
+            start += len;
+        }
+        Ok(())
+    };
+    let mut sum = 0.0f64;
+    mono_blocks(source, &mut |x| sum += x as f64)?;
+    let mean = sum / n as f64;
+    let mut sq = 0.0f64;
+    if n > 1 {
+        mono_blocks(source, &mut |x| sq += (x as f64 - mean).powi(2))?;
+    }
+    let var = if n > 1 { sq / (n - 1) as f64 } else { 0.0 };
+    Ok((mean as f32, (var.sqrt() + 1e-8) as f32))
+}
+
+/// Counts finished windows, reports them and checks for cancellation.
+struct Tracker<'a> {
+    control: &'a Control,
+    done: usize,
+    total: usize,
+}
+
+impl Tracker<'_> {
+    fn check(&self) -> Result<()> {
+        if self.control.is_cancelled() {
+            Err(CharonError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// One window finished: report it, then stop if cancelled.
+    fn step(&mut self) -> Result<()> {
+        self.done += 1;
+        self.control.report(Progress {
+            done: self.done,
+            total: self.total,
+        });
+        self.check()
     }
 }
 

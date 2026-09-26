@@ -176,6 +176,7 @@ fn main() -> anyhow::Result<()> {
         let path = session.end_profiling()?;
         println!("profile written: {path}");
     }
+    #[cfg(unix)]
     if rss {
         let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
         unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
@@ -183,6 +184,10 @@ fn main() -> anyhow::Result<()> {
             "peak RSS {:.0} MB",
             usage.ru_maxrss as f64 / (1024.0 * 1024.0)
         );
+    }
+    #[cfg(not(unix))]
+    if rss {
+        println!("peak RSS: not measured on this platform");
     }
     if ep != "cpu" {
         let mut cpu = build("cpu")?;

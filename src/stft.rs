@@ -167,6 +167,121 @@ impl DemucsStft {
     }
 }
 
+/// Plain `torch.stft` / `torch.istft` with a periodic Hann window,
+/// `center=True` with reflect padding, `normalized=False`, one-sided
+/// (all `n_fft / 2 + 1` bins kept). This is the transform of band-split
+/// models such as TIGER; it is verified against `torch.stft` fixtures.
+pub struct TorchStft {
+    n_fft: usize,
+    hop: usize,
+    window: Vec<f32>,
+    forward: Arc<dyn RealToComplex<f32>>,
+    inverse: Arc<dyn ComplexToReal<f32>>,
+}
+
+impl TorchStft {
+    /// A transform with window and FFT size `n_fft` and hop `hop`.
+    pub fn new(n_fft: usize, hop: usize) -> Self {
+        assert!(hop > 0 && hop <= n_fft, "hop must be in 1..=n_fft");
+        let mut planner = RealFftPlanner::<f32>::new();
+        let window = (0..n_fft)
+            .map(|i| 0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / n_fft as f64).cos())
+            .map(|w| w as f32)
+            .collect();
+        Self {
+            n_fft,
+            hop,
+            window,
+            forward: planner.plan_fft_forward(n_fft),
+            inverse: planner.plan_fft_inverse(n_fft),
+        }
+    }
+
+    /// Number of frequency bins, `n_fft / 2 + 1`.
+    pub fn freqs(&self) -> usize {
+        self.n_fft / 2 + 1
+    }
+
+    /// Number of frames for `length` samples, `length / hop + 1`.
+    pub fn frames(&self, length: usize) -> usize {
+        length / self.hop + 1
+    }
+
+    /// `torch.stft` of one channel.
+    pub fn stft(&self, signal: &[f32]) -> Result<Spectrogram> {
+        let (n_fft, hop) = (self.n_fft, self.hop);
+        let padded = reflect_pad(signal, n_fft / 2, n_fft / 2)?;
+        let frames = self.frames(signal.len());
+        let freqs = self.freqs();
+        let mut frame = self.forward.make_input_vec();
+        let mut bins = self.forward.make_output_vec();
+        let mut scratch = self.forward.make_scratch_vec();
+        let mut data = Vec::with_capacity(freqs * frames);
+        for f in 0..frames {
+            let start = f * hop;
+            for (dst, (&x, &w)) in frame
+                .iter_mut()
+                .zip(padded[start..start + n_fft].iter().zip(&self.window))
+            {
+                *dst = x * w;
+            }
+            self.forward
+                .process_with_scratch(&mut frame, &mut bins, &mut scratch)
+                .map_err(|e| CharonError::Processing(e.to_string()))?;
+            data.extend_from_slice(&bins);
+        }
+        Ok(Spectrogram {
+            freqs,
+            frames,
+            data,
+        })
+    }
+
+    /// `torch.istft(..., length=length)` of one channel. The imaginary
+    /// parts of the DC and Nyquist bins are ignored, as `irfft` does.
+    pub fn istft(&self, spec: &Spectrogram, length: usize) -> Result<Vec<f32>> {
+        let (n_fft, hop) = (self.n_fft, self.hop);
+        if spec.freqs != self.freqs() {
+            return Err(CharonError::Processing(format!(
+                "spectrogram has {} bins, expected {}",
+                spec.freqs,
+                self.freqs()
+            )));
+        }
+        let frames = spec.frames;
+        let full_len = n_fft + hop * (frames.max(1) - 1);
+        let mut acc = vec![0.0f32; full_len];
+        let mut env = vec![0.0f32; full_len];
+        let scale = 1.0 / n_fft as f32;
+        let mut bins = self.inverse.make_input_vec();
+        let mut frame = self.inverse.make_output_vec();
+        let mut scratch = self.inverse.make_scratch_vec();
+        let last = spec.freqs - 1;
+        for f in 0..frames {
+            bins.copy_from_slice(&spec.data[f * spec.freqs..(f + 1) * spec.freqs]);
+            bins[0].im = 0.0;
+            bins[last].im = 0.0;
+            self.inverse
+                .process_with_scratch(&mut bins, &mut frame, &mut scratch)
+                .map_err(|e| CharonError::Processing(e.to_string()))?;
+            let start = f * hop;
+            for (i, (&x, &w)) in frame.iter().zip(&self.window).enumerate() {
+                acc[start + i] += x * scale * w;
+                env[start + i] += w * w;
+            }
+        }
+        let center = n_fft / 2;
+        let mut out = vec![0.0f32; length];
+        for (i, o) in out.iter_mut().enumerate() {
+            let j = center + i;
+            if j < full_len && env[j] > 1e-11 {
+                *o = acc[j] / env[j];
+            }
+        }
+        Ok(out)
+    }
+}
+
 /// `torch.nn.functional.pad(mode="reflect")` for 1-D data
 fn reflect_pad(x: &[f32], left: usize, right: usize) -> Result<Vec<f32>> {
     let n = x.len();
@@ -216,6 +331,52 @@ mod tests {
             frames,
             data,
         }
+    }
+
+    #[test]
+    fn torch_stft_matches_fixture() {
+        let x = fixture("torch_stft_in.f32");
+        let t = TorchStft::new(2048, 512);
+        let spec = t.stft(&x).unwrap();
+        assert_eq!((spec.freqs, spec.frames), (1025, x.len() / 512 + 1));
+        let want = cac_to_spectrogram(&fixture("torch_stft_spec.f32"), 1025, spec.frames);
+        let peak = want.data.iter().map(|c| c.norm()).fold(0.0f32, f32::max);
+        let max_err = spec
+            .data
+            .iter()
+            .zip(&want.data)
+            .map(|(a, b)| (a - b).norm())
+            .fold(0.0f32, f32::max);
+        assert!(max_err / peak < 1e-5, "relative error {}", max_err / peak);
+    }
+
+    #[test]
+    fn torch_istft_matches_fixture() {
+        let t = TorchStft::new(2048, 512);
+        let want = fixture("torch_istft_out.f32");
+        let frames = want.len() / 512 + 1;
+        let spec = cac_to_spectrogram(&fixture("torch_istft_spec.f32"), 1025, frames);
+        let got = t.istft(&spec, want.len()).unwrap();
+        let peak = want.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+        let max_err = got
+            .iter()
+            .zip(&want)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(max_err / peak < 1e-5, "relative error {}", max_err / peak);
+    }
+
+    #[test]
+    fn torch_stft_round_trip() {
+        let x = fixture("torch_stft_in.f32");
+        let t = TorchStft::new(2048, 512);
+        let y = t.istft(&t.stft(&x).unwrap(), x.len()).unwrap();
+        let max_err = x
+            .iter()
+            .zip(&y)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(max_err < 1e-5, "{max_err}");
     }
 
     #[test]

@@ -1,6 +1,75 @@
 # Changelog
 
-## 0.1.1 (unreleased)
+## 0.1.2 (2026-09-26)
+
+### Added
+- Progress and cancellation: `Separator::separate_with` and
+  `Processor::process_with` take a `Control` with a progress callback
+  (counted in model windows) and a `CancelToken`; a cancelled job stops
+  after the current window with `CharonError::Cancelled`. The CLI
+  progress bar now follows real progress (it used to stay at zero).
+- Streaming separation for inputs longer than memory:
+  `Separator::separate_stream` reads an `AudioSource` (random access in
+  blocks) and writes an `StemSink` (stems in time order), holding only a
+  few model windows in memory. Output is bit-identical to `separate` on
+  the same input (tested with identity models and with HTDemucs on CPU
+  and CoreML). `BufferSource` and `BufferSink` are in-memory versions.
+  Time shifts are not supported in streaming.
+- Region-limited removal: `Separator::remove_in_regions` reduces one
+  stem inside a list of regions (`RegionPlan`: target stem, regions with
+  a keep gain, context, crossfade) and writes two outputs, the processed
+  mix and the removed part. Outside the regions the output is the input
+  bit for bit (tested); inside, the removal fades in and out over the
+  crossfade. The estimate is subtracted from the mix rather than the
+  other stems summed, so what the model did not attribute to the target
+  stays untouched. Progress counts all regions as one job.
+- TIGER-DnR music model: `tools/export/export_tiger.py` exports the
+  music branch of the published TIGER-DnR checkpoint (Apache-2.0
+  weights) to ONNX with the STFT outside the graph, checking parity
+  against PyTorch on noise, tones and real audio (95.9-105.8 dB
+  agreement, max waveform difference 2e-5). New `ModelContract::Spectral`
+  (host `torch.stft`/`torch.istft`, verified against fixtures at 1e-5),
+  `ModelConfig::per_channel` (mono models run on every channel of any
+  layout), and presets `ModelConfig::tiger_music` /
+  `SeparatorConfig::tiger_music`.
+- `Blend::Uniform` window blending (plain average of overlapping
+  windows) next to the Demucs triangle; with 12 s windows and 2/3
+  overlap Charon matches the TIGER authors' own chunked pipeline to
+  84 dB away from the file edges.
+- CLI: `--overlap` and `--blend`; model files named `*tiger*` use the
+  TIGER preset.
+- `Separator::with_process_config` makes a separator with other
+  processing settings (overlap, blend) on the already loaded model, so
+  one session serves a cheap detection pass and an overlapping removal
+  pass without loading the model twice.
+
+### Changed
+- Symphonia is optional: feature `decode` (file reading) and feature
+  `aac` (its AAC decoder), both on by default. An application can build
+  without them and decode through the operating system. `AudioFile::read`
+  and `Separator::separate_file`, `separate_and_save` and
+  `separate_batch` need `decode`.
+- CI covers the new feature combinations and runs on Windows.
+- The TIGER preset runs on the CPU provider explicitly. With the
+  `coreml` feature, `Auto` first tried CoreML, which rejects the exported
+  PReLU, and paid for the failed compile at every model load.
+- Licensed under `MIT OR Apache-2.0` (previously MIT only). Versions
+  0.1.0 and 0.1.1 stay MIT. `LICENSE` is now `LICENSE-MIT`, next to
+  `LICENSE-APACHE`.
+
+### Fixed
+- The `charon` binary and the `profile` and `ep_probe` examples build on
+  Windows. The resident server (`charon serve`, `stop`, `ping`) needs
+  Unix sockets and reports that it is unavailable elsewhere; `separate`
+  then runs in-process.
+- README: the build command for the `charon` binary named the binary
+  with a capital letter.
+- The window stride was computed in `f32` and truncated, so an overlap
+  of 2/3 on 529200 samples gave 176399 instead of 176400 and every
+  window drifted by one more sample. It is now computed in `f64` and
+  rounded (HTDemucs strides are unchanged).
+
+## 0.1.1 (2026-09-25)
 
 ### Fixed
 - The default build compiles again. `Cargo.lock` is now committed, and

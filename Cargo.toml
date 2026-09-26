@@ -1,10 +1,10 @@
 [package]
 name = "charon-audio"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 rust-version = "1.89"
 authors = ["Valkyra Labs"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
 description = "Rust music source separation pipeline for ONNX models"
 keywords = ["audio", "music", "separation", "ml", "demucs"]
 categories = ["multimedia::audio", "science"]
@@ -30,9 +30,12 @@ ort = { version = "=2.0.0-rc.13", optional = true, default-features = false, fea
 # Audio I/O and processing
 # Codecs and containers are listed explicitly; "all" would also pull in
 # video/subtitle experiments and every metadata reader.
-symphonia = { version = "0.6", default-features = false, features = [
+# Optional (feature `decode`); its AAC decoder is a separate feature
+# (`aac`) because shipping an AAC decoder falls under the AAC patent pool,
+# so an application can decode AAC through the operating system instead.
+symphonia = { version = "0.6", optional = true, default-features = false, features = [
     "opt-simd", "all-meta",
-    "aac", "adpcm", "alac", "flac", "mp1", "mp2", "mp3", "pcm", "vorbis",
+    "adpcm", "alac", "flac", "mp1", "mp2", "mp3", "pcm", "vorbis",
     "aiff", "caf", "isomp4", "mkv", "ogg", "wav",
 ] }
 rubato = "0.15"
@@ -66,18 +69,24 @@ env_logger = "0.11"
 libc = "0.2"
 
 [features]
-default = ["ort-backend"]
+default = ["ort-backend", "decode", "aac"]
 ort-backend = ["dep:ort"]
+# Read audio files (Symphonia): WAV, FLAC, MP3, OGG/Vorbis, ALAC, AIFF,
+# CAF, MP4 and MKV containers. Without it the library works on PCM
+# buffers only.
+decode = ["dep:symphonia"]
+# Symphonia's AAC-LC decoder.
+aac = ["decode", "symphonia/aac"]
 realtime = ["dep:cpal"]
 # Apple CoreML execution provider (macOS). Used by the split-transform
-# HTDemucs export; measured in docs/parity/2026-09-25-gpu-and-speed.md.
+# HTDemucs export; measured in docs/MEASUREMENTS.md.
 coreml = ["ort-backend", "ort/coreml", "dep:sha2"]
 # GPU execution providers for measurement only (examples/ep_probe). Not a
-# supported path: see docs/parity for what was measured.
+# supported path: see docs/MEASUREMENTS.md for what was measured.
 ep-experimental = ["coreml", "ort/webgpu"]
 
 [package.metadata.docs.rs]
-features = ["ort-backend"]
+features = ["ort-backend", "decode", "aac"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [[bench]]
@@ -87,7 +96,7 @@ harness = false
 [[bin]]
 name = "charon"
 path = "src/bin/charon.rs"
-required-features = ["ort-backend"]
+required-features = ["ort-backend", "decode"]
 
 [lib]
 name = "charon_audio"
@@ -96,12 +105,12 @@ path = "src/lib.rs"
 [[example]]
 name = "separate"
 path = "examples/separate.rs"
-required-features = ["ort-backend"]
+required-features = ["ort-backend", "decode"]
 
 [[example]]
 name = "batch"
 path = "examples/batch.rs"
-required-features = ["ort-backend"]
+required-features = ["ort-backend", "decode"]
 
 [[example]]
 name = "realtime"
@@ -111,7 +120,7 @@ required-features = ["ort-backend"]
 [[example]]
 name = "profile"
 path = "examples/profile.rs"
-required-features = ["ort-backend"]
+required-features = ["ort-backend", "decode"]
 
 [[example]]
 name = "ep_probe"
@@ -121,3 +130,4 @@ required-features = ["ort-backend"]
 [[example]]
 name = "advanced"
 path = "examples/advanced.rs"
+required-features = ["ort-backend", "decode"]

@@ -35,6 +35,14 @@ cargo test
 cargo test --no-default-features
 ```
 
+```bash
+cargo clippy --all-targets --no-default-features --features ort-backend -- -D warnings && cargo test --no-default-features --features ort-backend
+```
+
+```bash
+cargo clippy --all-targets --no-default-features --features ort-backend,decode -- -D warnings && cargo test --no-default-features --features ort-backend,decode
+```
+
 On macOS also:
 
 ```bash
@@ -65,8 +73,9 @@ onnxruntime, soundfile, numpy. Pin demucs; other packages that depend on
 
 ## Layout
 
-- `src/audio.rs`: decoding (Symphonia), resampling (rubato), WAV/FLAC
-  writing.
+- `src/audio.rs`: decoding (Symphonia, features `decode` and `aac`),
+  resampling (rubato), WAV/FLAC writing.
+- `src/control.rs`: progress reporting and cancellation.
 - `src/stft.rs`: `HTDemucs._spec`/`_ispec` with realfft, fixture-tested
   against `torch.stft`.
 - `src/models.rs`: ONNX Runtime session, `ModelContract`, `OnnxOptions`,
@@ -96,3 +105,11 @@ onnxruntime, soundfile, numpy. Pin demucs; other packages that depend on
 Commit messages: `<type>(<crate>): <short description>` with type in
 feat, fix, refactor, test, docs, chore. A pull request states what was
 measured, on what, and what the numbers were before and after.
+
+## Licensing of contributions
+
+Charon is licensed under either of Apache-2.0 or MIT, at your option.
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in the work by you, as defined in the
+Apache-2.0 license, shall be dual licensed as above, without any
+additional terms or conditions.
