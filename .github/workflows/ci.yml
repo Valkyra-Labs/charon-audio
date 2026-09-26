@@ -36,8 +36,11 @@ jobs:
         include:
           - { os: ubuntu-latest, features: "" }
           - { os: ubuntu-latest, features: "--no-default-features" }
+          - { os: ubuntu-latest, features: "--no-default-features --features ort-backend" }
+          - { os: ubuntu-latest, features: "--no-default-features --features ort-backend,decode" }
           - { os: ubuntu-latest, features: "--features realtime" }
           - { os: macos-latest, features: "--all-features" }
+          - { os: windows-latest, features: "" }
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -58,7 +61,10 @@ jobs:
         include:
           - { os: ubuntu-latest, features: "" }
           - { os: ubuntu-latest, features: "--no-default-features" }
+          - { os: ubuntu-latest, features: "--no-default-features --features ort-backend" }
+          - { os: ubuntu-latest, features: "--no-default-features --features ort-backend,decode" }
           - { os: ubuntu-latest, features: "--features realtime" }
+          - { os: windows-latest, features: "" }
           - { os: macos-latest, features: "" }
           - { os: macos-latest, features: "--no-default-features" }
           - { os: macos-latest, features: "--all-features" }

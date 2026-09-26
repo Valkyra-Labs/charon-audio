@@ -2,7 +2,7 @@
 
 use crate::error::{CharonError, Result};
 #[cfg(feature = "ort-backend")]
-use crate::stft::{DemucsStft, Spectrogram};
+use crate::stft::{DemucsStft, Spectrogram, TorchStft};
 use ndarray::Array2;
 #[cfg(feature = "ort-backend")]
 use ort::{
@@ -47,6 +47,10 @@ pub struct ModelConfig {
     /// Tensor contract
     #[serde(default)]
     pub contract: ModelContract,
+    /// The model processes one channel at a time, so the input keeps its
+    /// own channel count (`channels` is then not enforced).
+    #[serde(default)]
+    pub per_channel: bool,
     /// ONNX Runtime session options
     #[serde(default)]
     pub onnx: OnnxOptions,
@@ -92,6 +96,19 @@ pub enum ModelContract {
         spec: String,
         time: String,
         spec_out: String,
+    },
+    /// Mask-based spectral model on one mono channel with the transforms
+    /// outside the graph (for example TIGER): `input` is the plain
+    /// `torch.stft` of the window (`n_fft`, `hop`, periodic Hann, centre
+    /// reflect padding, not normalized) as `[1, 2, F, T]` real and
+    /// imaginary planes; `output` is `[1, 2, F, T]` for a single source or
+    /// `[1, S, 2, F, T]`. The host runs `torch.istft` per source. Every
+    /// channel of the input is processed on its own.
+    Spectral {
+        input: String,
+        output: String,
+        n_fft: usize,
+        hop: usize,
     },
 }
 
@@ -189,6 +206,7 @@ impl ModelConfig {
             chunk_size: None,
             segment_samples: Some(HTDEMUCS_SEGMENT_SAMPLES),
             contract: ModelContract::default(),
+            per_channel: false,
             onnx: OnnxOptions {
                 // The in-graph STFT export only runs on the CPU provider.
                 execution_provider: ExecutionProvider::Cpu,
@@ -218,6 +236,44 @@ impl ModelConfig {
     }
 }
 
+/// Window of the TIGER-DnR ONNX export: 12 s at 44.1 kHz.
+pub const TIGER_SEGMENT_SAMPLES: usize = 529_200;
+
+impl ModelConfig {
+    /// Configuration for the music branch of TIGER-DnR exported by
+    /// `tools/export/export_tiger.py`: one output, `music`, from the
+    /// `Spectral` contract (n_fft 2048, hop 512), mono per channel, 12 s
+    /// windows at 44.1 kHz.
+    pub fn tiger_music<P: AsRef<Path>>(model_path: P) -> Self {
+        Self {
+            model_path: model_path.as_ref().to_path_buf(),
+            backend: None,
+            sample_rate: 44100,
+            channels: 1,
+            sources: vec!["music".to_string()],
+            chunk_size: None,
+            segment_samples: Some(TIGER_SEGMENT_SAMPLES),
+            contract: ModelContract::Spectral {
+                input: "spec".to_string(),
+                output: "music_spec".to_string(),
+                n_fft: 2048,
+                hop: 512,
+            },
+            per_channel: true,
+            // Memory-pattern planning doubles peak memory on this graph
+            // (6.5 GB against 3.4 GB for 60 s of audio) at equal speed.
+            // CPU only: CoreML rejects the exported PReLU, and an export
+            // it accepts ran 25x slower than the CPU (docs/MEASUREMENTS.md);
+            // trying it anyway costs a failed compile at every load.
+            onnx: OnnxOptions {
+                memory_pattern: false,
+                execution_provider: ExecutionProvider::Cpu,
+                ..OnnxOptions::default()
+            },
+        }
+    }
+}
+
 impl Default for ModelConfig {
     fn default() -> Self {
         Self {
@@ -234,6 +290,7 @@ impl Default for ModelConfig {
             chunk_size: Some(441000), // 10 seconds at 44.1kHz
             segment_samples: None,
             contract: ModelContract::default(),
+            per_channel: false,
             onnx: OnnxOptions::default(),
         }
     }
@@ -247,6 +304,7 @@ pub struct OnnxModel {
     session: Mutex<Session>,
     config: ModelConfig,
     stft: Option<DemucsStft>,
+    torch_stft: Option<TorchStft>,
     provider: &'static str,
 }
 
@@ -268,13 +326,18 @@ impl OnnxModel {
         };
         log::info!("ONNX session on {provider}");
         let stft = match config.contract {
-            ModelContract::Waveform { .. } => None,
             ModelContract::DemucsSplit { .. } => Some(DemucsStft::htdemucs()),
+            _ => None,
+        };
+        let torch_stft = match config.contract {
+            ModelContract::Spectral { n_fft, hop, .. } => Some(TorchStft::new(n_fft, hop)),
+            _ => None,
         };
         Ok(Self {
             session: Mutex::new(session),
             config,
             stft,
+            torch_stft,
             provider,
         })
     }
@@ -396,7 +459,100 @@ impl OnnxModel {
                 time,
                 spec_out,
             } => self.infer_split(input, mix, spec, time, spec_out),
+            ModelContract::Spectral {
+                input: i, output, ..
+            } => self.infer_spectral(input, i, output),
         }
+    }
+
+    fn infer_spectral(
+        &self,
+        input: &Array2<f32>,
+        input_name: &str,
+        output_name: &str,
+    ) -> Result<Vec<Array2<f32>>> {
+        let stft = self
+            .torch_stft
+            .as_ref()
+            .expect("spectral contract has an STFT");
+        let (channels, samples) = input.dim();
+        let (freqs, frames) = (stft.freqs(), stft.frames(samples));
+        let plane = freqs * frames;
+        let num_sources = self.config.sources.len();
+
+        let specs: Vec<Spectrogram> = (0..channels)
+            .into_par_iter()
+            .map(|ch| stft.stft(&input.row(ch).to_vec()))
+            .collect::<Result<_>>()?;
+
+        // One run per channel; ONNX Runtime parallelizes inside a run.
+        let mut per_channel: Vec<Vec<f32>> = Vec::with_capacity(channels);
+        for spec in &specs {
+            let mut data = vec![0.0f32; 2 * plane];
+            let (re, im) = data.split_at_mut(plane);
+            for t in 0..frames {
+                for f in 0..freqs {
+                    let c = spec.data[t * freqs + f];
+                    re[f * frames + t] = c.re;
+                    im[f * frames + t] = c.im;
+                }
+            }
+            let tensor = Tensor::from_array(([1, 2, freqs, frames], data))?;
+            let mut session = self.lock_session()?;
+            let outputs = session.run(ort::inputs![input_name => tensor])?;
+            let out = outputs.get(output_name).ok_or_else(|| {
+                CharonError::Model(format!("model has no output '{output_name}'"))
+            })?;
+            let (shape, values) = out.try_extract_tensor::<f32>()?;
+            let single = [1, 2, freqs as i64, frames as i64];
+            let multi = [1, num_sources as i64, 2, freqs as i64, frames as i64];
+            if !(shape[..] == multi[..] || (num_sources == 1 && shape[..] == single[..])) {
+                return Err(CharonError::Model(format!(
+                    "spectral output shape {:?}, expected {multi:?}",
+                    &shape[..]
+                )));
+            }
+            per_channel.push(values.to_vec());
+        }
+
+        // iSTFT per (source, channel)
+        let waves: Vec<Vec<f32>> = (0..num_sources * channels)
+            .into_par_iter()
+            .map(|idx| {
+                let (s, ch) = (idx / channels, idx % channels);
+                let values = &per_channel[ch];
+                let re = &values[(2 * s) * plane..(2 * s + 1) * plane];
+                let im = &values[(2 * s + 1) * plane..(2 * s + 2) * plane];
+                let mut data = Vec::with_capacity(plane);
+                for t in 0..frames {
+                    for f in 0..freqs {
+                        data.push(realfft::num_complex::Complex::new(
+                            re[f * frames + t],
+                            im[f * frames + t],
+                        ));
+                    }
+                }
+                stft.istft(
+                    &Spectrogram {
+                        freqs,
+                        frames,
+                        data,
+                    },
+                    samples,
+                )
+            })
+            .collect::<Result<_>>()?;
+
+        (0..num_sources)
+            .map(|s| {
+                let mut data = Vec::with_capacity(channels * samples);
+                for ch in 0..channels {
+                    data.extend_from_slice(&waves[s * channels + ch]);
+                }
+                Array2::from_shape_vec((channels, samples), data)
+                    .map_err(|e| CharonError::Model(e.to_string()))
+            })
+            .collect()
     }
 
     fn infer_waveform(

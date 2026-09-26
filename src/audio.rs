@@ -7,11 +7,17 @@ use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use std::path::Path;
+#[cfg(feature = "decode")]
 use symphonia::core::codecs::audio::AudioDecoderOptions;
+#[cfg(feature = "decode")]
 use symphonia::core::errors::Error as SymphoniaError;
+#[cfg(feature = "decode")]
 use symphonia::core::formats::probe::Hint;
+#[cfg(feature = "decode")]
 use symphonia::core::formats::{FormatOptions, TrackType};
+#[cfg(feature = "decode")]
 use symphonia::core::io::MediaSourceStream;
+#[cfg(feature = "decode")]
 use symphonia::core::meta::MetadataOptions;
 
 /// Audio buffer holding multi-channel audio data
@@ -265,10 +271,12 @@ fn fix_streaminfo_min_blocksize(bytes: &mut [u8]) {
 pub struct AudioFile;
 
 impl AudioFile {
-    /// Read audio file with automatic format detection.
+    /// Read audio file with automatic format detection (feature `decode`;
+    /// AAC needs feature `aac`).
     ///
     /// Samples are returned as decoded, without clipping: lossy codecs can
     /// produce values outside [-1, 1].
+    #[cfg(feature = "decode")]
     pub fn read<P: AsRef<Path>>(path: P) -> Result<AudioBuffer> {
         let path = path.as_ref();
         let file = std::fs::File::open(path)?;

@@ -36,6 +36,9 @@ pub enum CharonError {
     #[error("Not supported: {0}")]
     NotSupported(String),
 
+    #[error("Cancelled")]
+    Cancelled,
+
     #[error("Unknown error: {0}")]
     Unknown(String),
 }
