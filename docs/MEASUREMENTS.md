@@ -77,7 +77,7 @@ model loaded once, three consecutive jobs. Script:
 | Charon 0.1.1 before this work (in-graph export, CPU) | CPU | cold | 26.4 s | 2.1 GB |
 
 Separation only (`examples/profile`), split exports: 16.6 s on CPU
-(RTF 11.6), 5.6 s on CoreML (RTF 34). A cold CoreML process spends
+(11.6x faster than real time), 5.6 s on CoreML (34x). A cold CoreML process spends
 7 s loading the compiled model when macOS's compiled-model cache is
 warm and about 27 s when it is not; this happens outside ONNX Runtime
 (its on-disk cache entry is untouched either way), and the resident
@@ -136,8 +136,8 @@ Speed and memory, 60 s mono mixture, CPU:
 
 Levers measured and dropped: intra-op threads (4: 50.6 s; 8, 10, 14:
 42.6-43.1 s), a batch-2 export (4.79 s per channel-window against
-4.13 s unbatched), shorter windows (real-time factor 0.343 / 0.322 /
-0.320 per channel at 12 / 6 / 3 s, linear, so no quadratic attention to
+4.13 s unbatched), shorter windows (wall time 0.343 / 0.322 / 0.320
+of the audio's length per channel at 12 / 6 / 3 s, linear, so no quadratic attention to
 save). Profile of one run: Transpose 24.6%, Conv 24.1%,
 InstanceNormalization 15.2%, Resize 11.1% of kernel time over about
 10,000 nodes.
@@ -153,7 +153,7 @@ the split. The host has 12 cores: rows with more threads in total
 oversubscribe it (the first rows were run before this was noticed; the
 1 x 12 and 2 x 6 rows are the ones the app uses).
 
-| sessions x threads | wall | real-time factor | peak RSS |
+| sessions x threads | wall | wall / audio length | peak RSS |
 |---|---|---|---|
 | 1 x 14 | 51.2 s | 0.355 | 3.4 GB |
 | 1 x 12 | 47.7 s | 0.331 | 3.6 GB |
