@@ -109,7 +109,7 @@ server exists to pay it once.
 
 ## TIGER-DnR music branch (0.1.2, 2026-09-25)
 
-Build: branch `release/0.1.2` on top of `6831e48` (uncommitted working
+Build: branch `release/0.1.2` on top of `9fd8eae` (uncommitted working
 tree at the time), release, features `ort-backend,decode,aac,coreml`.
 Model `tiger_music.onnx` SHA-256 `bb52541d...`, from checkpoint
 `dd1c696e...`. Reference: the TIGER repository at `9f18d4a`, torch
@@ -146,7 +146,7 @@ Sessions and threads (2026-09-26): the same model, mono, no overlap,
 the first 144 s (12 windows) of a 1080p60 gameplay recording's audio,
 split into N parts at window boundaries and run on N separators at once
 (`charon-music-removal bench-par`). Release build, charon-audio
-`release/0.1.2` working tree on `6831e48`. Differences against one
+`release/0.1.2` working tree on `9fd8eae`. Differences against one
 session on 14 threads: at most 1.2e-4, the same as one session on 7
 threads against 14 (6.6e-5), so they come from the thread count, not
 the split. The host has 12 cores: rows with more threads in total
