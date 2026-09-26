@@ -13,6 +13,13 @@ use charon_audio::{
 };
 use std::time::Instant;
 
+/// Peak resident memory in MB (Unix); NaN where `getrusage` does not exist.
+#[cfg(not(unix))]
+fn peak_rss_mb() -> f64 {
+    f64::NAN
+}
+
+#[cfg(unix)]
 fn peak_rss_mb() -> f64 {
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
     unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };

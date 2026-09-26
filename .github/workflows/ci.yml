@@ -118,4 +118,6 @@ jobs:
           curl -sSL -o models/htdemucs.onnx \
             https://huggingface.co/StemSplitio/htdemucs-onnx/resolve/main/htdemucs.onnx
           echo "68d0bf16428ef66e692cdff8a9ccf28f1ef3f69440d57e58605a4cc55fcc5e74  models/htdemucs.onnx" | shasum -a 256 -c
-      - run: CHARON_HTDEMUCS_MODEL=$PWD/models/htdemucs.onnx cargo test --release --test htdemucs -- --ignored --nocapture
+      # Only the test whose model this job downloads; the split and TIGER
+      # exports are produced locally and are not hosted.
+      - run: CHARON_HTDEMUCS_MODEL=$PWD/models/htdemucs.onnx cargo test --release --test htdemucs -- --ignored --nocapture --exact htdemucs_matches_pytorch_reference

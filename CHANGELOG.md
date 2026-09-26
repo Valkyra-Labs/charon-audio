@@ -58,6 +58,10 @@
   `LICENSE-APACHE`.
 
 ### Fixed
+- The `charon` binary and the `profile` and `ep_probe` examples build on
+  Windows. The resident server (`charon serve`, `stop`, `ping`) needs
+  Unix sockets and reports that it is unavailable elsewhere; `separate`
+  then runs in-process.
 - README: the build command for the `charon` binary named the binary
   with a capital letter.
 - The window stride was computed in `f32` and truncated, so an overlap

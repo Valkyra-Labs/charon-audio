@@ -10,11 +10,14 @@
 //! model load) and answers jobs on a Unix socket, one JSON object per line.
 //! `separate` sends the job to a running server when the socket answers,
 //! otherwise it runs in-process. All decoding, separation and writing happen
-//! in the server process; the client only waits for the reply.
+//! in the server process; the client only waits for the reply. The server
+//! needs Unix sockets; elsewhere `separate` always runs in-process.
 
 use charon_audio::{BitDepth, Blend, ExecutionProvider, Separator, SeparatorConfig, StemFormat};
 use serde::{Deserialize, Serialize};
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -200,6 +203,20 @@ fn run_job(separator: &Separator, job: &Job) -> Result<Reply, String> {
     })
 }
 
+#[cfg(not(unix))]
+fn serve(_o: &Options) -> Result<(), String> {
+    Err(NO_SERVER.to_string())
+}
+
+#[cfg(not(unix))]
+fn send(_socket: &Path, _request: &Request) -> Result<Reply, String> {
+    Err(NO_SERVER.to_string())
+}
+
+#[cfg(not(unix))]
+const NO_SERVER: &str = "the resident server needs Unix sockets and is not available on this platform; `separate` runs in-process";
+
+#[cfg(unix)]
 fn serve(o: &Options) -> Result<(), String> {
     let model = o.model.clone().ok_or("serve needs --model")?;
     let t = Instant::now();
@@ -272,6 +289,7 @@ fn serve(o: &Options) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn send(socket: &Path, request: &Request) -> Result<Reply, String> {
     let mut stream = UnixStream::connect(socket).map_err(|e| e.to_string())?;
     writeln!(stream, "{}", serde_json::to_string(request).unwrap()).map_err(|e| e.to_string())?;
