@@ -2,16 +2,18 @@
 
 [![Crates.io](https://img.shields.io/crates/v/charon-audio.svg)](https://crates.io/crates/charon-audio)
 [![Documentation](https://docs.rs/charon-audio/badge.svg)](https://docs.rs/charon-audio)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Build Status](https://github.com/Valkyra-Labs/charon-audio/workflows/CI/badge.svg)](https://github.com/Valkyra-Labs/charon-audio/actions)
 [![Downloads](https://img.shields.io/crates/d/charon-audio.svg)](https://crates.io/crates/charon-audio)
 
 **Rust music source separation pipeline for ONNX models.**
 
-Charon runs the [HTDemucs](https://github.com/facebookresearch/demucs)
-4-stem model (drums, bass, other, vocals) through ONNX Runtime, with
+Charon runs source-separation models through ONNX Runtime, with
 decoding, STFT/iSTFT, segmentation, overlap-add and output writing done
-in Rust. No Python at run time. On macOS the network runs on the GPU
+in Rust: the [HTDemucs](https://github.com/facebookresearch/demucs)
+4-stem music model (drums, bass, other, vocals), and the music branch of
+[TIGER-DnR](https://github.com/JusperLee/TIGER) (dialogue/music/effects),
+which finds and removes music under speech and sound effects. No Python at run time. On macOS the network runs on the GPU
 through CoreML. The pipeline reproduces Demucs 4.1.0 to float precision;
 every number in this file comes from a recorded measurement, summarized
 in [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md).
@@ -27,6 +29,8 @@ in [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md).
 | Resampling to the model rate (rubato) | Works, time-aligned (impulse tests). |
 | Memory | Split export: 3.4 GB peak on CPU, 2.6 GB on CoreML (ONNX Runtime activation memory). In-graph export: 2.1 GB with its low-memory preset. |
 | Speed, 193 s track on an Apple M4 Pro | Resident server on CoreML: 6.2-6.4 s per track (PyTorch on MPS, model resident: 7.3-7.6 s). Cold process: 14.1 s CoreML, 16.7 s CPU (PyTorch cold: 8.7 s MPS, 35.2 s CPU). Full table in [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md). |
+| TIGER-DnR music branch (music out of speech and effects), CPU | **Works** (0.1.2). Own ONNX export (`tools/export/export_tiger.py`, 25 MB), STFT/iSTFT in Rust. Full pipeline within 1.7e-5 frame RMS of PyTorch; with the authors' own window layout, 84 dB agreement with their pipeline. About 0.33 x real time per channel on an M4 Pro CPU. CoreML is not usable for it (1034 s and 28 GB for one minute). Weights Apache-2.0. |
+| Region-limited removal, streaming, progress and cancel | **Works** (0.1.2): `remove_in_regions` leaves the input bit-exact outside the regions; `separate_stream` keeps memory bounded and is bit-identical to whole-buffer separation. |
 | Other models (MDX-Net, RoFormer, Open-Unmix, htdemucs_ft/6s) | **Not supported.** Each needs its own tensor contract and parity check. |
 | CUDA, WebGPU | **Not supported.** CUDA is unmeasured (no hardware). WebGPU runs the in-graph export but slower than CPU. |
 | Split export hosting | Not hosted yet. Produce the files with `tools/export/export_htdemucs.py` (PyTorch + demucs 4.1.0); hashes, verification and the hosting steps are in [docs/MODELS.md](docs/MODELS.md). |
@@ -36,7 +40,7 @@ in [docs/MEASUREMENTS.md](docs/MEASUREMENTS.md).
 | C ABI, Python bindings | Not in this release. |
 
 The published crate `charon-audio 0.1.0` on crates.io is an earlier
-version whose inference was a placeholder. Do not use it.
+version whose inference was a placeholder, and it is yanked.
 
 ## Quick start
 
@@ -130,6 +134,25 @@ target/release/charon separate song.mp3 -o stems/
 in-process with `--model`. `charon ping` and `charon stop` talk to the
 server. The protocol is one JSON object per line over a Unix socket.
 
+### D. Remove music from speech and effects (TIGER-DnR)
+
+```bash
+python tools/export/export_tiger.py --repo TIGER --weights TIGER-DnR --out tiger_music.onnx --dynamo --opset 18
+```
+
+`--repo` is a clone of [JusperLee/TIGER](https://github.com/JusperLee/TIGER),
+`--weights` a download of [JusperLee/TIGER-DnR](https://huggingface.co/JusperLee/TIGER-DnR)
+(`config.json`, `model.safetensors`); the script checks parity against
+PyTorch before writing. Then:
+
+```bash
+cargo run --release --bin charon -- separate speech_with_music.wav -o out --model tiger_music.onnx --ep cpu --no-server
+```
+
+writes `out/music.wav`. In a program, `Separator::remove_in_regions`
+subtracts the music estimate inside given regions and leaves the rest
+of the input untouched.
+
 ### Library
 
 ```rust
@@ -215,14 +238,17 @@ The real-model regression test needs the model:
 CHARON_HTDEMUCS_MODEL=/path/to/htdemucs.onnx cargo test --release -- --ignored
 ```
 
-Features: `ort-backend` (default), `coreml` (CoreML execution provider,
-macOS), `realtime` (CPAL input, experimental), `ep-experimental`
-(CoreML + WebGPU for `examples/ep_probe`).
+Features: `ort-backend` (default), `decode` (default; file reading with
+Symphonia), `aac` (default; Symphonia's AAC decoder), `coreml` (CoreML
+execution provider, macOS), `realtime` (CPAL input, experimental),
+`ep-experimental` (CoreML + WebGPU for `examples/ep_probe`). Without
+`decode` the library works on PCM buffers only.
 
 ## Repository layout
 
 - `src/audio.rs`: decoding (Symphonia), resampling (rubato), WAV/FLAC
   writing.
+- `src/control.rs`: progress reporting and cancellation.
 - `src/models.rs`: ONNX Runtime session, model contracts, session
   options, execution providers.
 - `src/stft.rs`: Demucs STFT/iSTFT (`_spec`/`_ispec`) with realfft.
@@ -242,7 +268,15 @@ See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Model weights are not covered, see above.
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or
+[MIT license](LICENSE-MIT), at your option. Versions 0.1.0 and 0.1.1
+were published under MIT only. Model weights are not covered, see
+above.
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in the work by you, as defined in the
+Apache-2.0 license, shall be dual licensed as above, without any
+additional terms or conditions.
 
 ## Acknowledgements
 

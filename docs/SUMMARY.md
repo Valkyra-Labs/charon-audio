@@ -18,11 +18,13 @@ the same warm-model treatment.
   record (`docs/MEASUREMENTS.md`) and the scripts to reproduce it
   (`tools/parity/`).
 
-## State (0.1.1)
+## State (0.1.2)
 
 Supported: HTDemucs 4-stem, three ONNX artifacts (in-graph CPU, split
-CPU, split CoreML), WAV/FLAC/MP3/OGG/AAC input, WAV and FLAC output,
-resampling, time-shift ensembling, CoreML on macOS, resident server.
+CPU, split CoreML); the TIGER-DnR music branch (CPU); WAV/FLAC/MP3/OGG/AAC
+input, WAV and FLAC output, resampling, time-shift ensembling, CoreML on
+macOS, resident server; progress and cancellation, streaming
+separation, removal limited to regions.
 
 Not supported: other model families, CUDA, WebGPU, real-time streaming
 (the `realtime` feature is experimental), model download (files are
@@ -31,8 +33,8 @@ verified by hash but fetched by the user; see `docs/MODELS.md`).
 ## Documents
 
 - `README.md`: status, quick start, measurements summary.
-- `CHANGELOG.md`: what changed in 0.1.1 and what was removed, with
-  reasons.
+- `CHANGELOG.md`: what changed in each release and what was removed,
+  with reasons.
 - `docs/IMPLEMENTATION.md`: the pipeline and its contracts.
 - `docs/MODELS.md`: artifacts, hashes, license position, hosting steps.
 - `docs/MEASUREMENTS.md`: the numbers and how they were obtained.
